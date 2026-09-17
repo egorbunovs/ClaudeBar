@@ -199,7 +199,27 @@ pill within `SnapThreshold` physical pixels of an edge or corner snaps it there 
 remembers the anchor; dropping it in open space keeps the exact position as `Free`.
 `SnapPadding` is the gap it keeps from the edges it is snapped to. Because the working
 area excludes the taskbar, a bottom anchor snaps to the taskbar's edge where there is one
-and the screen edge where there is not. Both values have sliders in the right-click menu.
+and the screen edge where there is not.
+
+While dragging, a **dashed ghost outline shows where it will land**. That is also why
+dragging is hand-rolled rather than using `Window.DragMove`: DragMove runs its own
+blocking modal loop, so nothing else gets a look in while it is up and there is no way to
+update a preview as the pill moves. `OnDragStart`/`OnDragMove`/`OnDragEnd` capture the
+mouse and drive placement directly, in physical pixels like everything else.
+
+### Rows, and why they line up
+
+Two things were fighting alignment:
+
+1. **The bar.** See below — segments were rounding to different physical widths.
+2. **The grid.** Each row is a separate `Grid` inside the `ItemsControl`, so `Auto`
+   columns were sized *per row* and drifted apart. Fixed with
+   `Grid.IsSharedSizeScope` on the ItemsControl and `SharedSizeGroup` on the bar,
+   percentage and reset columns, so every row shares one set of column widths.
+
+The percentage chip sizes to its content rather than reserving room for `100%`, which
+realistically never appears while actively working. Shared sizing keeps the chips
+identical across rows even when the numbers differ in width.
 
 ### Why the bar is drawn by hand
 
@@ -238,9 +258,25 @@ CLAUDEBAR_DIAG=1 dotnet run                  # trace placement to %LOCALAPPDATA%
 ```
 
 Right-click the pill (or the tray icon) for: refresh, **which monitor to show on**,
-**snap position + padding sliders**, **background opacity slider**, start with Windows,
-hide, open settings.json, quit. Left-click-drag moves it, snapping to whichever edge or
-corner it is dropped near. Left-click the tray icon to show/hide.
+**snap position**, **settings sliders**, start with Windows, hide, open settings.json,
+quit. Left-click-drag moves it, showing a ghost of where it will snap. Left-click the
+tray icon to show/hide.
+
+Autostart has no entry in `settings.json` on purpose: the `HKCU\...\Run` key is the
+single source of truth, and a copy in the settings file only ever gets to disagree with
+it.
+
+### Sliders live in their own window, not the menu
+
+`Settings (sliders)...` opens a small panel. The sliders were originally in the context
+menu, and they did not work: a WPF `ContextMenu` takes mouse capture for its own
+navigation, so a `Slider` inside one never sees a continuous drag — the value only lurches
+when the menu happens to let an event through. An ordinary window gets normal input and
+updates live.
+
+Related trap, fixed at the same time: **staleness dims `Rows.Opacity`, never
+`Shell.Opacity`.** The shell's alpha belongs to the background-opacity slider, and writing
+it from the render path made the pill jump back to full opacity at every poll.
 
 ### settings.json
 

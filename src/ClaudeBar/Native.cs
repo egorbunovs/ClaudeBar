@@ -7,6 +7,8 @@ internal static class Native
     private const int GwlExStyle = -20;
     private const int WsExToolWindow = 0x00000080;
     private const int WsExAppWindow = 0x00040000;
+    private const int WsExTransparent = 0x00000020;
+    private const int WsExNoActivate = 0x08000000;
 
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoZOrder = 0x0004;
@@ -35,6 +37,16 @@ internal static class Native
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
         int X, int Y, int cx, int cy, uint uFlags);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PointL
+    {
+        public int X, Y;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out PointL lpPoint);
+
     /// <summary>
     /// Marks the pill as a tool window: no Alt-Tab entry, no taskbar button.
     /// It still takes clicks, so the context menu and dragging keep working.
@@ -47,6 +59,23 @@ internal static class Native
         style &= ~WsExAppWindow;
         SetWindowLongPtr(handle, GwlExStyle, (IntPtr)style);
     }
+
+    /// <summary>
+    /// Makes a window click-through and non-activating: the drag ghost must never take
+    /// the mouse away from the pill being dragged, nor steal focus from the app behind.
+    /// </summary>
+    public static void MakeGhost(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero) return;
+        var style = (long)GetWindowLongPtr(handle, GwlExStyle);
+        style |= WsExToolWindow | WsExTransparent | WsExNoActivate;
+        style &= ~WsExAppWindow;
+        SetWindowLongPtr(handle, GwlExStyle, (IntPtr)style);
+    }
+
+    /// <summary>Cursor position in physical pixels, matching everything else in placement.</summary>
+    public static (int X, int Y) CursorPosition() =>
+        GetCursorPos(out var p) ? (p.X, p.Y) : (0, 0);
 
     /// <summary>The window's real rectangle, in physical pixels.</summary>
     public static Rect GetBounds(IntPtr handle) =>

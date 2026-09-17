@@ -20,6 +20,9 @@ public partial class MainWindow : Window
     private UsageSnapshot? _lastGood;
     private TrayController? _tray;
     private bool _dragging;
+    private int _dragOffsetX, _dragOffsetY;
+    private GhostWindow? _ghost;
+    private SnapAnchor _pendingAnchor = SnapAnchor.Free;
     private int _consecutiveFailures;
 
     public MainWindow(AppSettings settings)
@@ -30,7 +33,9 @@ public partial class MainWindow : Window
         ApplyBackgroundOpacity();
         ContextMenu = BuildMenu();
 
-        MouseLeftButtonDown += OnDrag;
+        MouseLeftButtonDown += OnDragStart;
+        MouseMove += OnDragMove;
+        MouseLeftButtonUp += OnDragEnd;
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
 
@@ -69,7 +74,7 @@ public partial class MainWindow : Window
 
     private void MarkStale(UsageSnapshot snapshot, string reason)
     {
-        Shell.Opacity = 0.55;
+        Rows.Opacity = 0.55;
         ToolTip = $"{reason} - reading taken {snapshot.FetchedAt.ToLocalTime():HH:mm:ss}";
     }
 
@@ -148,7 +153,7 @@ public partial class MainWindow : Window
             Rows.ItemsSource = rows;
             Rows.Visibility = Visibility.Visible;
             MessagePanel.Visibility = Visibility.Collapsed;
-            Shell.Opacity = 1.0;
+            Rows.Opacity = 1.0;
 
             var lines = new List<string>
             {
@@ -166,7 +171,9 @@ public partial class MainWindow : Window
         else if (_lastGood is not null)
         {
             // A blip while a good reading is on screen: leave the numbers, just dim them.
-            Shell.Opacity = 0.55;
+            // This dims the ROWS, never the shell: the shell's alpha belongs to the user's
+            // opacity slider, and writing it here made the pill jump back to full opacity.
+            Rows.Opacity = 0.55;
             if (!keepLastGood)
             {
                 ToolTip = snapshot.Error + " - showing last reading from "
@@ -220,17 +227,67 @@ public partial class MainWindow : Window
             $"({monitor.Right},{monitor.Bottom}) size={width}x{height} -> ({x},{y})");
     }
 
-    private void OnDrag(object sender, MouseButtonEventArgs e)
+    /// <summary>
+    /// Dragging is done by hand rather than with Window.DragMove, because DragMove runs its
+    /// own blocking modal loop: nothing else gets a look in while it is up, so there is no
+    /// way to update a snap preview as the pill moves.
+    /// </summary>
+    private void OnDragStart(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
 
-        _dragging = true;
-        try { DragMove(); }
-        catch { return; }
-        finally { _dragging = false; }
+        var bounds = Native.GetBounds(Handle);
+        if (bounds.Width == 0) return;
 
-        // Remember where it was put, on whichever monitor it was dropped. Measured in
-        // physical pixels so the offset means the same thing on every monitor.
+        var (cx, cy) = Native.CursorPosition();
+        _dragOffsetX = cx - bounds.Left;
+        _dragOffsetY = cy - bounds.Top;
+        _dragging = true;
+        _pendingAnchor = _settings.Anchor;
+
+        CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void OnDragMove(object sender, MouseEventArgs e)
+    {
+        if (!_dragging || e.LeftButton != MouseButtonState.Pressed) return;
+
+        var handle = Handle;
+        var bounds = Native.GetBounds(handle);
+        if (bounds.Width == 0) return;
+
+        var (cx, cy) = Native.CursorPosition();
+        var x = cx - _dragOffsetX;
+        var y = cy - _dragOffsetY;
+        Native.MoveTo(handle, x, y);
+
+        // Work out where letting go would put it, and show that as a ghost.
+        var monitor = ScreenService.FromPoint(x + bounds.Width / 2, y + bounds.Height / 2);
+        _pendingAnchor = ScreenService.AnchorForDrop(monitor, x, y,
+            bounds.Width, bounds.Height, _settings.SnapThreshold);
+
+        if (_pendingAnchor == SnapAnchor.Free)
+        {
+            _ghost?.HideGhost();
+            return;
+        }
+
+        var (gx, gy) = ScreenService.Place(monitor, _pendingAnchor,
+            bounds.Width, bounds.Height, _settings.SnapPadding, 0, 0);
+
+        _ghost ??= new GhostWindow();
+        _ghost.ShowAt(gx, gy, bounds.Width, bounds.Height);
+    }
+
+    private void OnDragEnd(object sender, MouseButtonEventArgs e)
+    {
+        if (!_dragging) return;
+
+        _dragging = false;
+        ReleaseMouseCapture();
+        _ghost?.HideGhost();
+
         var bounds = Native.GetBounds(Handle);
         if (bounds.Width == 0) return;
 
@@ -239,8 +296,7 @@ public partial class MainWindow : Window
             bounds.Top + bounds.Height / 2);
 
         _settings.MonitorDeviceName = monitor.DeviceName;
-        _settings.Anchor = ScreenService.AnchorForDrop(monitor, bounds.Left, bounds.Top,
-            bounds.Width, bounds.Height, _settings.SnapThreshold);
+        _settings.Anchor = _pendingAnchor;
 
         // Free placement keeps the exact drop position; a snapped one is re-laid out.
         if (_settings.Anchor == SnapAnchor.Free)
@@ -317,24 +373,11 @@ public partial class MainWindow : Window
             };
             snap.Items.Add(item);
         }
-        snap.Items.Add(new Separator());
-        snap.Items.Add(SliderItem("Padding", _settings.SnapPadding, 0, 64, 1,
-            v => $"{v:0} px",
-            v => { _settings.SnapPadding = (int)v; Reposition(); },
-            () => _settings.Save()));
-        snap.Items.Add(SliderItem("Snap distance", _settings.SnapThreshold, 0, 200, 4,
-            v => v <= 0 ? "off" : $"{v:0} px",
-            v => _settings.SnapThreshold = (int)v,
-            () => _settings.Save()));
         menu.Items.Add(snap);
 
-        // ---- how it looks ----
-        var look = new MenuItem { Header = "Appearance" };
-        look.Items.Add(SliderItem("Background", _settings.BackgroundOpacity * 100, 0, 100, 5,
-            v => $"{v:0}%",
-            v => { _settings.BackgroundOpacity = v / 100.0; ApplyBackgroundOpacity(); },
-            () => _settings.Save()));
-        menu.Items.Add(look);
+        var settingsPanel = new MenuItem { Header = "Settings (sliders)..." };
+        settingsPanel.Click += (_, _) => ShowSettingsWindow();
+        menu.Items.Add(settingsPanel);
 
         menu.Items.Add(new Separator());
 
@@ -366,8 +409,7 @@ public partial class MainWindow : Window
         };
         startup.Click += (_, _) =>
         {
-            _settings.StartWithWindows = Autostart.Toggle();
-            _settings.Save();
+            Autostart.Toggle();
             ContextMenu = BuildMenu();
         };
         menu.Items.Add(startup);
@@ -392,59 +434,40 @@ public partial class MainWindow : Window
         return menu;
     }
 
-    /// <summary>
-    /// A menu row carrying a live slider. Changes apply as it is dragged so the effect is
-    /// visible while choosing, and are saved once on release rather than on every tick.
-    /// </summary>
-    private static MenuItem SliderItem(string label, double value, double min, double max,
-        double tick, Func<double, string> format, Action<double> onChange, Action onCommit)
+    private void ApplyBackgroundOpacity() => ShellFill.Opacity = _settings.BackgroundOpacity;
+
+    private SettingsWindow? _settingsWindow;
+
+    private void ShowSettingsWindow()
     {
-        var text = new TextBlock
+        if (_settingsWindow is { IsVisible: true })
         {
-            Text = label,
-            Width = 96,
-            VerticalAlignment = VerticalAlignment.Center
-        };
+            _settingsWindow.Activate();
+            return;
+        }
 
-        var readout = new TextBlock
+        _settingsWindow = new SettingsWindow(_settings, ApplyLiveSettings);
+        _settingsWindow.Closed += (_, _) =>
         {
-            Text = format(value),
-            Width = 44,
-            TextAlignment = TextAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Center,
-            Opacity = 0.75
+            _settingsWindow = null;
+            ContextMenu = BuildMenu();
         };
-
-        var slider = new Slider
-        {
-            Minimum = min,
-            Maximum = max,
-            Value = Math.Clamp(value, min, max),
-            TickFrequency = tick,
-            IsSnapToTickEnabled = true,
-            Width = 130,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(6, 0, 6, 0)
-        };
-
-        slider.ValueChanged += (_, e) =>
-        {
-            readout.Text = format(e.NewValue);
-            onChange(e.NewValue);
-        };
-        slider.PreviewMouseUp += (_, _) => onCommit();
-        slider.LostMouseCapture += (_, _) => onCommit();
-
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(text);
-        panel.Children.Add(slider);
-        panel.Children.Add(readout);
-
-        // Without this the menu closes the moment the slider is grabbed.
-        return new MenuItem { Header = panel, StaysOpenOnClick = true };
+        _settingsWindow.Show();
     }
 
-    private void ApplyBackgroundOpacity() => ShellFill.Opacity = _settings.BackgroundOpacity;
+    /// <summary>Applies whatever the sliders just changed, immediately.</summary>
+    private void ApplyLiveSettings()
+    {
+        ApplyBackgroundOpacity();
+        Reposition();
+
+        var interval = TimeSpan.FromSeconds(_settings.PollSeconds);
+        if (_consecutiveFailures == 0 && _timer.Interval != interval)
+            _timer.Interval = interval;
+
+        // Thresholds changed: recolour what is already on screen without re-polling.
+        if (_lastGood is not null) Render(_lastGood, keepLastGood: true);
+    }
 
     protected override void OnClosed(EventArgs e)
     {

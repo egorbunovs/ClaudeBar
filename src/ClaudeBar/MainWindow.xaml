@@ -31,16 +31,16 @@
 
     <Grid>
       <!-- Normal state: one row per limit window reported by the API. -->
-      <ItemsControl x:Name="Rows" Visibility="Collapsed">
+      <ItemsControl x:Name="Rows" Visibility="Collapsed" Grid.IsSharedSizeScope="True">
         <ItemsControl.ItemTemplate>
           <DataTemplate>
             <Grid Margin="0,1.5,0,1.5" ToolTip="{Binding Tooltip}">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="24"/>
                 <ColumnDefinition Width="15"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto" SharedSizeGroup="Bar"/>
+                <ColumnDefinition Width="Auto" SharedSizeGroup="Chip"/>
+                <ColumnDefinition Width="Auto" SharedSizeGroup="Reset"/>
               </Grid.ColumnDefinitions>
 
               <TextBlock Grid.Column="0" Text="{Binding Label}" Foreground="#9AA5B8"
@@ -62,7 +62,7 @@
               <!-- Cue 3: the number, in a rounded chip that separates it from the reset time -->
               <Border Grid.Column="3"
                       Background="{x:Static local:LimitRow.ChipFill}"
-                      CornerRadius="5" Padding="6,1,6,2" MinWidth="44"
+                      CornerRadius="4" Padding="5,0,5,1"
                       VerticalAlignment="Center">
                 <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA"
                            FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"

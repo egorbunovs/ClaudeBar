@@ -52,7 +52,8 @@ public sealed class AppSettings
     /// </summary>
     public double BackgroundOpacity { get; set; } = 0.92;
 
-    public bool StartWithWindows { get; set; }
+    // Autostart deliberately has no setting here: the HKCU Run key is the single source of
+    // truth, and a copy in this file only ever gets to disagree with it.
     public bool Visible { get; set; } = true;
 
     /// <summary>
