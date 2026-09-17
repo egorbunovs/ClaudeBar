@@ -1,0 +1,18 @@
+# Build output
+bin/
+obj/
+*.user
+
+# Runtime settings written next to the exe
+settings.json
+
+# NEVER commit captured account material.
+# ClaudeBar stores per-account credential copies under %LOCALAPPDATA%\ClaudeBar\accounts,
+# but belt and braces: nothing credential-shaped may ever enter this repo.
+accounts/
+*.credentials.json
+.credentials.json
+credentials*.json
+*.token
+*.pem
+backups/
