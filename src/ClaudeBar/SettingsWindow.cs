@@ -38,9 +38,9 @@ public sealed class SettingsWindow : Window
         var panel = new StackPanel { Margin = new Thickness(16) };
         panel.Children.Add(Heading("ClaudeBar"));
 
-        panel.Children.Add(Slider("Background", _settings.BackgroundOpacity * 100, 0, 100, 1,
+        panel.Children.Add(Slider("Opacity", _settings.Opacity * 100, 20, 100, 1,
             v => $"{v:0}%",
-            v => { _settings.BackgroundOpacity = v / 100.0; _onChanged(); }));
+            v => { _settings.Opacity = v / 100.0; _onChanged(); }));
 
         panel.Children.Add(Slider("Snap padding", _settings.SnapPadding, 0, 64, 1,
             v => $"{v:0} px",

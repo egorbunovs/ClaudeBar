@@ -29,7 +29,12 @@
       <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.45" Color="Black"/>
     </Border.Effect>
 
-    <Grid>
+    <StackPanel>
+      <!-- Which account these numbers belong to. Shown whenever it is known. -->
+      <TextBlock x:Name="AccountLine" Visibility="Collapsed"
+                 Foreground="#8E9AAE" FontFamily="Segoe UI" FontSize="10.5"
+                 Margin="1,0,0,3" TextTrimming="CharacterEllipsis" MaxWidth="300"/>
+
       <!-- Normal state: one row per limit window reported by the API. -->
       <ItemsControl x:Name="Rows" Visibility="Collapsed" Grid.IsSharedSizeScope="True">
         <ItemsControl.ItemTemplate>
@@ -83,6 +88,6 @@
         <TextBlock x:Name="MessageText" Text="starting…" Foreground="#C9D1DE"
                    FontFamily="Segoe UI" FontSize="11.5" VerticalAlignment="Center"/>
       </StackPanel>
-    </Grid>
+    </StackPanel>
   </Border>
 </Window>

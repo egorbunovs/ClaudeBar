@@ -3,6 +3,10 @@ bin/
 obj/
 *.user
 
+# Published binaries: a 72MB exe does not belong in the repo.
+# It is built into release/ locally and published through GitHub Releases instead.
+release/
+
 # Runtime settings written next to the exe
 settings.json
 

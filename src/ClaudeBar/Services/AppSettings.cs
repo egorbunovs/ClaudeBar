@@ -43,14 +43,19 @@ public sealed class AppSettings
     public int OffsetY { get; set; } = 12;
 
     public int PollSeconds { get; set; } = 60;
-    public double WarnAt { get; set; } = 70;
+    public double WarnAt { get; set; } = 80;
     public double CriticalAt { get; set; } = 90;
 
     /// <summary>
-    /// Alpha of the pill's background only. Text and segments stay fully opaque, so turning
-    /// the background down never costs readability.
+    /// Opacity of the whole pill.
+    ///
+    /// This used to fade only the background brush, on the theory that keeping text opaque
+    /// protected readability. In practice that was invisible: over a dark desktop the change
+    /// between 0% and 100% was about ten levels of grey, so the slider looked broken.
+    /// Fading the window is what "transparency" is taken to mean, and it is unmistakable.
+    /// Floored at 0.2 so the pill can never be made impossible to find.
     /// </summary>
-    public double BackgroundOpacity { get; set; } = 0.92;
+    public double Opacity { get; set; } = 0.92;
 
     // Autostart deliberately has no setting here: the HKCU Run key is the single source of
     // truth, and a copy in this file only ever gets to disagree with it.
@@ -115,7 +120,7 @@ public sealed class AppSettings
         PollSeconds = Math.Clamp(PollSeconds, 15, 3600);
         WarnAt = Math.Clamp(WarnAt, 1, 100);
         CriticalAt = Math.Clamp(CriticalAt, WarnAt, 100);
-        BackgroundOpacity = Math.Clamp(BackgroundOpacity, 0.0, 1.0);
+        Opacity = Math.Clamp(Opacity, 0.2, 1.0);
         SnapPadding = Math.Clamp(SnapPadding, 0, 200);
         SnapThreshold = Math.Clamp(SnapThreshold, 0, 400);
     }

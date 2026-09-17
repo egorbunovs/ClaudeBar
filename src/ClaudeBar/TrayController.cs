@@ -116,14 +116,15 @@ public sealed class TrayController : IDisposable
         _icon.Icon = _current;
         old?.Dispose();
 
-        // Warn on the way up only, once per threshold crossing.
+        // Warn on the way up only, once per threshold crossing. Uses ClaudeBar's own toast:
+        // shell balloons get titled with the app's AppUserModelID when it has no registered
+        // shell identity, which is where "Microsoft.Explorer.Notification..." came from.
         if (level > 0 && level > _lastAnnouncedLevel && snapshot.Ok && worst is not null)
         {
-            _icon.BalloonTipTitle = level == 2 ? "Claude limit nearly gone" : "Claude limit getting close";
-            _icon.BalloonTipText =
-                $"{worst.ShortLabel} window at {percent:0}%" +
-                (worst.ResetText.Length > 0 ? $", resets in {worst.ResetText}" : "");
-            _icon.ShowBalloonTip(6000);
+            var title = level == 2 ? "Claude limit nearly gone" : "Claude limit getting close";
+            var body = $"{worst.ShortLabel} window at {percent:0}%" +
+                       (worst.ResetText.Length > 0 ? $", resets in {worst.ResetText}" : "");
+            _window.Dispatcher.Invoke(() => _window.ShowToast(title, body, level));
         }
         if (level >= 0) _lastAnnouncedLevel = level;
     }

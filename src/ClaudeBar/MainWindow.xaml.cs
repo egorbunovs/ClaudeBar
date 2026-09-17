@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using ClaudeBar.Models;
@@ -14,14 +15,18 @@ public partial class MainWindow : Window
 {
     private readonly AppSettings _settings;
     private readonly UsageService _usage = new();
+    private readonly AccountSwitcher _switcher = new();
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _countdown = new();
     private CancellationTokenSource _inFlight = new();
     private UsageSnapshot? _lastGood;
     private TrayController? _tray;
+    private bool _mouseDown;
     private bool _dragging;
     private int _dragOffsetX, _dragOffsetY;
+    private int _pressX, _pressY;
     private GhostWindow? _ghost;
+    private ToastWindow? _toast;
     private SnapAnchor _pendingAnchor = SnapAnchor.Free;
     private int _consecutiveFailures;
 
@@ -30,7 +35,7 @@ public partial class MainWindow : Window
         _settings = settings;
         InitializeComponent();
 
-        ApplyBackgroundOpacity();
+        ApplyOpacity();
         ContextMenu = BuildMenu();
 
         MouseLeftButtonDown += OnDragStart;
@@ -155,6 +160,16 @@ public partial class MainWindow : Window
             MessagePanel.Visibility = Visibility.Collapsed;
             Rows.Opacity = 1.0;
 
+            if (snapshot.Account is { Length: > 0 } who)
+            {
+                AccountLine.Text = who;
+                AccountLine.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                AccountLine.Visibility = Visibility.Collapsed;
+            }
+
             var lines = new List<string>
             {
                 snapshot.Account is { } a ? "Account: " + a : "Claude Code"
@@ -184,6 +199,7 @@ public partial class MainWindow : Window
         else
         {
             Rows.Visibility = Visibility.Collapsed;
+            AccountLine.Visibility = Visibility.Collapsed;
             MessagePanel.Visibility = Visibility.Visible;
             MessageText.Text = snapshot.Error switch
             {
@@ -242,16 +258,40 @@ public partial class MainWindow : Window
         var (cx, cy) = Native.CursorPosition();
         _dragOffsetX = cx - bounds.Left;
         _dragOffsetY = cy - bounds.Top;
-        _dragging = true;
+        _pressX = cx;
+        _pressY = cy;
+
+        // Pressed, but not yet dragging: a plain click must not move the pill or flash a
+        // ghost. The drag only begins once the pointer has actually travelled.
+        _mouseDown = true;
+        _dragging = false;
         _pendingAnchor = _settings.Anchor;
 
         CaptureMouse();
         e.Handled = true;
     }
 
+    /// <summary>Windows' own drag threshold, converted to the physical pixels used here.</summary>
+    private bool PastDragThreshold(int cx, int cy)
+    {
+        var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        if (scale <= 0 || double.IsNaN(scale)) scale = 1.0;
+
+        var minX = SystemParameters.MinimumHorizontalDragDistance * scale;
+        var minY = SystemParameters.MinimumVerticalDragDistance * scale;
+        return Math.Abs(cx - _pressX) >= minX || Math.Abs(cy - _pressY) >= minY;
+    }
+
     private void OnDragMove(object sender, MouseEventArgs e)
     {
-        if (!_dragging || e.LeftButton != MouseButtonState.Pressed) return;
+        if (!_mouseDown || e.LeftButton != MouseButtonState.Pressed) return;
+
+        var (px, py) = Native.CursorPosition();
+        if (!_dragging)
+        {
+            if (!PastDragThreshold(px, py)) return;
+            _dragging = true;
+        }
 
         var handle = Handle;
         var bounds = Native.GetBounds(handle);
@@ -282,10 +322,15 @@ public partial class MainWindow : Window
 
     private void OnDragEnd(object sender, MouseButtonEventArgs e)
     {
+        if (!_mouseDown) return;
+
+        _mouseDown = false;
+        ReleaseMouseCapture();
+
+        // A click that never became a drag changes nothing.
         if (!_dragging) return;
 
         _dragging = false;
-        ReleaseMouseCapture();
         _ghost?.HideGhost();
 
         var bounds = Native.GetBounds(Handle);
@@ -381,23 +426,7 @@ public partial class MainWindow : Window
 
         menu.Items.Add(new Separator());
 
-        var switcher = new MenuItem
-        {
-            Header = "Switch account...",
-            IsEnabled = false,
-            ToolTip = "Next up - the credential swap is designed but not wired yet."
-        };
-        menu.Items.Add(switcher);
-
-        var allAccounts = new MenuItem
-        {
-            Header = "Show all accounts",
-            IsCheckable = true,
-            IsChecked = _settings.ShowAllAccounts,
-            IsEnabled = false,
-            ToolTip = "Available once accounts can be added - see README, Phase 2."
-        };
-        menu.Items.Add(allAccounts);
+        menu.Items.Add(BuildAccountMenu());
 
         menu.Items.Add(new Separator());
 
@@ -434,7 +463,132 @@ public partial class MainWindow : Window
         return menu;
     }
 
-    private void ApplyBackgroundOpacity() => ShellFill.Opacity = _settings.BackgroundOpacity;
+    // ---- account switching ---------------------------------------------------------
+
+    private MenuItem BuildAccountMenu()
+    {
+        var root = new MenuItem { Header = "Account" };
+        var accounts = _switcher.Accounts();
+        var currentUuid = AccountStore.ReadAccountBlock()?["accountUuid"]?.GetValue<string>();
+
+        if (accounts.Count == 0)
+        {
+            root.Items.Add(new MenuItem
+            {
+                Header = "No accounts saved yet",
+                IsEnabled = false
+            });
+        }
+        else
+        {
+            foreach (var account in accounts)
+            {
+                var isCurrent = account.AccountUuid == currentUuid;
+                var item = new MenuItem
+                {
+                    Header = account.Label + (isCurrent ? "  (current)" : ""),
+                    ToolTip = account.Detail + $" — saved {account.CapturedAt.ToLocalTime():d MMM HH:mm}",
+                    IsCheckable = true,
+                    IsChecked = isCurrent,
+                    IsEnabled = !isCurrent
+                };
+                var target = account;
+                item.Click += (_, _) => SwitchAccount(target);
+                root.Items.Add(item);
+            }
+        }
+
+        root.Items.Add(new Separator());
+
+        var save = new MenuItem
+        {
+            Header = "Save the signed-in account",
+            ToolTip = "Copies the current sign-in into ClaudeBar so it can switch back to it later."
+        };
+        save.Click += (_, _) =>
+        {
+            var captured = _switcher.CaptureCurrent(out var error);
+            Notify(captured is not null
+                ? $"Saved {captured.Label}"
+                : $"Could not save the account: {error}");
+            ContextMenu = BuildMenu();
+        };
+        root.Items.Add(save);
+
+        var add = new MenuItem
+        {
+            Header = "Add another account (opens a browser)...",
+            ToolTip = "Runs: claude auth login. When it finishes, use 'Save the signed-in account'."
+        };
+        add.Click += (_, _) => StartLogin();
+        root.Items.Add(add);
+
+        return root;
+    }
+
+    private async void SwitchAccount(StoredAccount target)
+    {
+        Notify($"Switching to {target.Label}...");
+
+        // The switch shells out to `claude auth status` to verify, so keep it off the UI thread.
+        var result = await Task.Run(() => _switcher.SwitchTo(target));
+
+        Notify(result.Ok
+            ? result.Message + ". Running sessions pick this up when their token next refreshes."
+            : result.Message);
+
+        Diagnostics.Log(() => $"switch result: ok={result.Ok} rolledBack={result.RolledBack} {result.Message}");
+
+        ContextMenu = BuildMenu();
+        if (result.Ok) await RefreshAsync();
+    }
+
+    private void StartLogin()
+    {
+        try
+        {
+            // A visible console: this is an interactive login and the user has to see it.
+            Process.Start(new ProcessStartInfo("cmd.exe", "/k claude auth login")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Notify($"Could not start claude auth login ({ex.GetType().Name})");
+        }
+    }
+
+    private void Notify(string message) => ShowToast("ClaudeBar", message, 0);
+
+    /// <summary>
+    /// ClaudeBar's own notification, placed above the pill rather than handed to the shell.
+    /// </summary>
+    public void ShowToast(string title, string body, int level)
+    {
+        Diagnostics.Log(() => $"toast[{level}]: {title} - {body}");
+
+        var monitor = ScreenService.Resolve(_settings.MonitorDeviceName);
+        var pill = Native.GetBounds(Handle);
+        var bottom = pill.Height > 0 && IsVisible
+            ? pill.Top - 8
+            : monitor.Bottom - _settings.SnapPadding;
+
+        _toast ??= new ToastWindow();
+        _toast.Show(title, body, level,
+            monitor.Right - _settings.SnapPadding, bottom,
+            TimeSpan.FromSeconds(level > 0 ? 8 : 5));
+    }
+
+    /// <summary>
+    /// Fades the whole pill. Staleness dims Rows.Opacity separately, and the two multiply,
+    /// so neither fights the other for the same property.
+    /// </summary>
+    private void ApplyOpacity()
+    {
+        Opacity = Math.Clamp(_settings.Opacity, 0.2, 1.0);
+        Diagnostics.Log(() => $"opacity: window={Opacity:0.00}");
+    }
 
     private SettingsWindow? _settingsWindow;
 
@@ -458,7 +612,7 @@ public partial class MainWindow : Window
     /// <summary>Applies whatever the sliders just changed, immediately.</summary>
     private void ApplyLiveSettings()
     {
-        ApplyBackgroundOpacity();
+        ApplyOpacity();
         Reposition();
 
         var interval = TimeSpan.FromSeconds(_settings.PollSeconds);

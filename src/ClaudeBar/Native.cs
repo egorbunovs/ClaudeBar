@@ -73,6 +73,18 @@ internal static class Native
         SetWindowLongPtr(handle, GwlExStyle, (IntPtr)style);
     }
 
+    [DllImport("kernel32.dll")]
+    private static extern bool AttachConsole(int processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool AllocConsole();
+
+    /// <summary>A WinExe has no console; borrow the caller's so --selftest can be read.</summary>
+    public static void AttachConsole()
+    {
+        if (!AttachConsole(-1)) AllocConsole();
+    }
+
     /// <summary>Cursor position in physical pixels, matching everything else in placement.</summary>
     public static (int X, int Y) CursorPosition() =>
         GetCursorPos(out var p) ? (p.X, p.Y) : (0, 0);

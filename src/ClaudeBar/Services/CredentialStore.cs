@@ -20,8 +20,16 @@ public sealed class CredentialStore
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
 
     public static string CredentialsPath => Path.Combine(ClaudeDir, ".credentials.json");
+
+    /// <summary>
+    /// ~/.claude.json, or its equivalent inside CLAUDE_CONFIG_DIR when that is set — Claude
+    /// Code moves its whole config there, as `claude auth status --json` confirms. Honouring
+    /// it also makes the account switcher testable against a throwaway copy.
+    /// </summary>
     public static string ConfigPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
+        Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") is { Length: > 0 } dir
+            ? Path.Combine(dir, ".claude.json")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
 
     public sealed record Token(string AccessToken, DateTimeOffset ExpiresAt)
     {

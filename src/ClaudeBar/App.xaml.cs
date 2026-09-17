@@ -11,6 +11,14 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Contains("--selftest"))
+        {
+            Native.AttachConsole();
+            Environment.ExitCode = SelfTest.Run();
+            Shutdown();
+            return;
+        }
+
         // One pill only: a second copy would just double the polling and fight over settings.json.
         _single = new Mutex(true, @"Local\ClaudeBar.SingleInstance", out var isFirst);
         if (!isFirst)
@@ -29,7 +37,13 @@ public partial class App : Application
         if (settings.Visible) window.Show();
 
         // The pill is a readout: a stray exception in a poll must not take the app down.
-        DispatcherUnhandledException += (_, args) => args.Handled = true;
+        DispatcherUnhandledException += (_, args) =>
+        {
+            // Keep the pill alive, but never silently: swallowing these hid a real bug
+            // (a frozen brush throwing on every opacity change) for two rounds of fixes.
+            Diagnostics.Log(() => $"unhandled: {args.Exception}");
+            args.Handled = true;
+        };
     }
 
     protected override void OnExit(ExitEventArgs e)
