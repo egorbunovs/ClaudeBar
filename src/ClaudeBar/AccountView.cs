@@ -22,7 +22,9 @@ public sealed class AccountView
 
     /// <summary>The expand/collapse chevron lives on the active account's line only.</summary>
     public Visibility ToggleVisibility => IsActive ? Visibility.Visible : Visibility.Collapsed;
-    public string ToggleGlyph => ShowingAll ? "▴" : "▾";
+    // Segoe MDL2 Assets: ChevronUp / ChevronDown. Real icons at a real size, not a 4px
+    // triangle from the text font.
+    public string ToggleGlyph => ShowingAll ? "" : "";
     public string ToggleTip => ShowingAll ? "Show only the active account" : "Show every account";
 
     /// <summary>Expanded view: the radio is the switch. Clicking an idle account's radio switches to it.</summary>
@@ -45,14 +47,15 @@ public sealed class AccountView
         // Idle accounts sit a little dimmer; a stale reading dims further, on any account.
         var opacity = (usage.IsActive ? 1.0 : 0.82) * (snap.Ok ? 1.0 : 0.6);
 
+        // Only conditions the user can act on get a label. A 429 or a moment offline while a
+        // good reading is on screen just dims the section; a "retrying" badge is noise.
         var status = snap.Ok ? "" : snap.Error switch
         {
             "signed out" => "signed out",
             "sign in again" => "sign in again",
-            "rate limited" => "retrying",
-            "offline" => "offline",
             "refresh failed" => "refresh failed",
-            _ => snap.Error ?? ""
+            "no stored token" => "not saved",
+            _ => ""
         };
 
         var lines = new List<string> { usage.Account.Detail };
@@ -65,7 +68,8 @@ public sealed class AccountView
             AccountUuid = usage.Account.AccountUuid,
             ShowingAll = showingAll,
             Email = usage.Account.Label,
-            Glyph = usage.IsActive ? "●" : "○",
+            // Segoe MDL2 Assets: RadioBtnOn / RadioBtnOff - it looks like what it is.
+            Glyph = usage.IsActive ? "" : "",
             GlyphBrush = usage.IsActive ? ActiveBrush : LimitRow.Muted,
             Status = status,
             Opacity = opacity,

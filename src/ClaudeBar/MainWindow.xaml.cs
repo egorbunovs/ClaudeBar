@@ -111,32 +111,51 @@ public partial class MainWindow : Window
 
     // ---- polling -------------------------------------------------------------------
 
-    public async Task RefreshAsync()
+    /// <param name="pollActive">
+    /// False reuses the last reading of the active account instead of fetching it again.
+    /// Expanding the view is the case: the active account is already on screen, and a second
+    /// call within seconds of the last one is what the endpoint answers with a 429.
+    /// </param>
+    public async Task RefreshAsync(bool pollActive = true)
     {
         _inFlight.Cancel();
         _inFlight = new CancellationTokenSource();
         var ct = _inFlight.Token;
 
         UsageSnapshot active;
-        try { active = await _usage.PollAsync(ct); }
-        catch (OperationCanceledException) { return; }
-        if (ct.IsCancellationRequested) return;
-
-        ApplyBackoff(active);
-        if (active.Ok)
+        if (!pollActive && _lastGood is not null)
         {
-            _lastGood = active;
-            UsageCache.Save(active);
+            active = _lastGood;
         }
+        else
+        {
+            try { active = await _usage.PollAsync(ct); }
+            catch (OperationCanceledException) { return; }
+            if (ct.IsCancellationRequested) return;
+
+            ApplyBackoff(active);
+            if (active.Ok)
+            {
+                _lastGood = active;
+                UsageCache.Save(active);
+            }
+        }
+
+        // A failed poll must not blank the active account: fall back to the last good reading,
+        // carrying the error so it renders dimmed. This applies to BOTH views - the expanded
+        // view once lost the active account entirely on a startup 429.
+        var bestActive = active.Ok || _lastGood is null
+            ? active
+            : _lastGood with { Error = active.Error, RetryAfter = active.RetryAfter };
 
         if (!_settings.ShowAllAccounts)
         {
-            RenderActiveOnly(active.Ok || _lastGood is null ? active : _lastGood with { Error = active.Error });
+            RenderActiveOnly(bestActive);
             return;
         }
 
         List<AccountUsage> all;
-        try { all = await _multi.PollAllAsync(active, ct); }
+        try { all = await _multi.PollAllAsync(bestActive, ct); }
         catch (OperationCanceledException) { return; }
         if (ct.IsCancellationRequested) return;
 
@@ -204,6 +223,10 @@ public partial class MainWindow : Window
     private void Render(List<AccountUsage> accounts, UsageSnapshot? active)
     {
         var withData = accounts.Where(a => a.Snapshot.HasData).ToList();
+
+        Diagnostics.Log(() =>
+            $"render: showAll={_settings.ShowAllAccounts} mini={_settings.Mini} in={accounts.Count} " +
+            $"withData={withData.Count} [{string.Join(", ", accounts.Select(a => $"{a.Account.Label}:{(a.IsActive ? "active" : "idle")}:{(a.Snapshot.Ok ? "ok" : a.Snapshot.Error)}:{a.Snapshot.Limits.Count}"))}]");
 
         if (withData.Count > 0)
         {
@@ -467,9 +490,10 @@ public partial class MainWindow : Window
         _settings.ShowAllAccounts = !_settings.ShowAllAccounts;
         _settings.Save();
 
-        // Redraw from what is already known so the chevron flips at once; the poll follows.
+        // Redraw from what is already known so the chevron flips at once. Expanding then
+        // fetches the OTHER accounts only; the active one is not re-polled.
         Rerender();
-        await RefreshAsync();
+        if (_settings.ShowAllAccounts) await RefreshAsync(pollActive: false);
     }
 
     // ---- menu ----------------------------------------------------------------------
