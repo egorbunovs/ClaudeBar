@@ -22,7 +22,6 @@
           BorderBrush="#33FFFFFF"
           BorderThickness="1">
     <Border.Background>
-      <!-- Alpha is driven by the opacity slider in the right-click menu. -->
       <SolidColorBrush x:Name="ShellFill" Color="#151922" Opacity="0.92"/>
     </Border.Background>
     <Border.Effect>
@@ -30,54 +29,138 @@
     </Border.Effect>
 
     <StackPanel>
-      <!-- Which account these numbers belong to. Shown whenever it is known. -->
-      <TextBlock x:Name="AccountLine" Visibility="Collapsed"
-                 Foreground="#8E9AAE" FontFamily="Segoe UI" FontSize="10.5"
-                 Margin="1,0,0,3" TextTrimming="CharacterEllipsis" MaxWidth="300"/>
-
-      <!-- Normal state: one row per limit window reported by the API. -->
-      <ItemsControl x:Name="Rows" Visibility="Collapsed" Grid.IsSharedSizeScope="True">
+      <!-- One section per account. Shared size scope spans every section, so every row of
+           every account lines up on the same columns. -->
+      <ItemsControl x:Name="Accounts" Visibility="Collapsed" Grid.IsSharedSizeScope="True">
         <ItemsControl.ItemTemplate>
           <DataTemplate>
-            <Grid Margin="0,1.5,0,1.5" ToolTip="{Binding Tooltip}">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="24"/>
-                <ColumnDefinition Width="15"/>
-                <ColumnDefinition Width="Auto" SharedSizeGroup="Bar"/>
-                <ColumnDefinition Width="Auto" SharedSizeGroup="Chip"/>
-                <ColumnDefinition Width="Auto" SharedSizeGroup="Reset"/>
-              </Grid.ColumnDefinitions>
+            <StackPanel Opacity="{Binding Opacity}" Margin="0,0,0,4" ToolTip="{Binding Tooltip}">
 
-              <TextBlock Grid.Column="0" Text="{Binding Label}" Foreground="#9AA5B8"
-                         FontFamily="Segoe UI" FontSize="11.5" VerticalAlignment="Center"/>
+              <!-- Header. The controls are plain elements with a Tag; the window hit-tests
+                   the click and routes it, because the drag handling captures the mouse and
+                   ordinary Click events never reach elements inside the pill. -->
+              <Grid Margin="0,0,0,3">
+                <Grid.Resources>
+                  <Style x:Key="Tap" TargetType="Border">
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Setter Property="CornerRadius" Value="4"/>
+                    <Setter Property="Cursor" Value="Hand"/>
+                    <Style.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#22FFFFFF"/>
+                      </Trigger>
+                    </Style.Triggers>
+                  </Style>
+                </Grid.Resources>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-              <!-- Cue 1: shape -->
-              <TextBlock Grid.Column="1" Text="{Binding Glyph}" Foreground="{Binding Accent}"
-                         FontSize="10" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <!-- Radio: filled for the active account; click an empty one to switch. -->
+                <Border Grid.Column="0" Tag="radio" Style="{StaticResource Tap}"
+                        Padding="4,1,6,1" Margin="-3,0,2,0" ToolTip="{Binding RadioTip}">
+                  <TextBlock Text="{Binding Glyph}" Foreground="{Binding GlyphBrush}"
+                             FontSize="9" VerticalAlignment="Center"/>
+                </Border>
 
-              <!-- Cue 2: countable segments, drawn on whole physical pixels so rows align -->
-              <local:SegmentBar Grid.Column="2"
-                                Percent="{Binding PercentValue}"
-                                Accent="{Binding Accent}"
-                                Track="{x:Static local:LimitRow.Track}"
-                                Segments="12"
-                                VerticalAlignment="Center"
-                                Margin="4,0,8,0"/>
+                <TextBlock Grid.Column="1" Text="{Binding Email}" Foreground="#A9B4C8"
+                           FontFamily="Segoe UI" FontSize="10.5" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" MaxWidth="260"/>
 
-              <!-- Cue 3: the number, in a rounded chip that separates it from the reset time -->
-              <Border Grid.Column="3"
-                      Background="{x:Static local:LimitRow.ChipFill}"
-                      CornerRadius="4" Padding="5,0,5,1"
-                      VerticalAlignment="Center">
-                <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA"
-                           FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"
-                           HorizontalAlignment="Right"/>
-              </Border>
+                <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="#FBBF24"
+                           Visibility="{Binding StatusVisibility}"
+                           FontFamily="Segoe UI" FontSize="10" VerticalAlignment="Center" Margin="8,0,0,0"/>
 
-              <TextBlock Grid.Column="4" Text="{Binding Reset}" Foreground="#C8D2E4"
-                         FontFamily="Segoe UI" FontSize="11.5" Margin="8,0,0,0"
-                         VerticalAlignment="Center"/>
-            </Grid>
+                <!-- Collapsed view only: the switch button opens the picker. -->
+                <Border Grid.Column="3" Tag="switch" Style="{StaticResource Tap}"
+                        Visibility="{Binding SwitchVisibility}" Padding="5,0,5,1" Margin="8,0,0,0"
+                        ToolTip="Switch account">
+                  <TextBlock Text="⇄" Foreground="#C8D2E4" FontSize="12" VerticalAlignment="Center"/>
+                </Border>
+
+                <!-- Expand / collapse between one account and all of them. -->
+                <Border Grid.Column="4" Tag="toggle" Style="{StaticResource Tap}"
+                        Visibility="{Binding ToggleVisibility}" Padding="5,0,4,1" Margin="4,0,-3,0"
+                        ToolTip="{Binding ToggleTip}">
+                  <TextBlock Text="{Binding ToggleGlyph}" Foreground="#C8D2E4" FontSize="11" VerticalAlignment="Center"/>
+                </Border>
+
+                <!-- Minimize to a single line of numbers. -->
+                <Border Grid.Column="5" Tag="mini" Style="{StaticResource Tap}"
+                        Visibility="{Binding MiniVisibility}" Padding="5,0,4,2" Margin="2,0,-3,0"
+                        ToolTip="Minimize to just the numbers">
+                  <TextBlock Text="–" Foreground="#C8D2E4" FontSize="12" VerticalAlignment="Center"/>
+                </Border>
+              </Grid>
+
+              <!-- Cue 1 shape, cue 2 countable segments, cue 3 the number. Never colour alone. -->
+              <ItemsControl ItemsSource="{Binding Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,1.5,0,1.5" ToolTip="{Binding Tooltip}">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="24"/>
+                        <ColumnDefinition Width="15"/>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="Bar"/>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="Chip"/>
+                        <ColumnDefinition Width="Auto" SharedSizeGroup="Reset"/>
+                      </Grid.ColumnDefinitions>
+
+                      <TextBlock Grid.Column="0" Text="{Binding Label}" Foreground="#9AA5B8"
+                                 FontFamily="Segoe UI" FontSize="11.5" VerticalAlignment="Center"/>
+
+                      <TextBlock Grid.Column="1" Text="{Binding Glyph}" Foreground="{Binding Accent}"
+                                 FontSize="10" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+
+                      <local:SegmentBar Grid.Column="2"
+                                        Percent="{Binding PercentValue}"
+                                        Accent="{Binding Accent}"
+                                        Track="{x:Static local:LimitRow.Track}"
+                                        Segments="12"
+                                        VerticalAlignment="Center"
+                                        Margin="4,0,8,0"/>
+
+                      <Border Grid.Column="3"
+                              Background="{x:Static local:LimitRow.ChipFill}"
+                              CornerRadius="4" Padding="5,0,5,1"
+                              VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA"
+                                   FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"
+                                   HorizontalAlignment="Right"/>
+                      </Border>
+
+                      <TextBlock Grid.Column="4" Text="{Binding Reset}" Foreground="#C8D2E4"
+                                 FontFamily="Segoe UI" FontSize="11.5" Margin="8,0,0,0"
+                                 VerticalAlignment="Center"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <!-- Mini layout: the active account's numbers on one line. Click to restore. -->
+      <ItemsControl x:Name="MiniPanel" Visibility="Collapsed" ToolTip="Click to expand">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Orientation="Horizontal" Margin="0,0,7,0" ToolTip="{Binding Tooltip}">
+              <TextBlock Text="{Binding Label}" Foreground="#9AA5B8" FontFamily="Segoe UI"
+                         FontSize="10.5" VerticalAlignment="Center" Margin="0,0,4,0"/>
+              <TextBlock Text="{Binding Glyph}" Foreground="{Binding Accent}" FontSize="9"
+                         VerticalAlignment="Center" Margin="0,0,4,0"/>
+              <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA" FontFamily="Segoe UI"
+                         FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </StackPanel>
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>

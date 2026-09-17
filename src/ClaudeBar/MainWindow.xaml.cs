@@ -15,6 +15,7 @@ public partial class MainWindow : Window
 {
     private readonly AppSettings _settings;
     private readonly UsageService _usage = new();
+    private readonly MultiAccountUsage _multi;
     private readonly AccountSwitcher _switcher = new();
     private readonly CredentialWatcher _credentials = new();
     private readonly DispatcherTimer _timer = new();
@@ -34,6 +35,7 @@ public partial class MainWindow : Window
     public MainWindow(AppSettings settings)
     {
         _settings = settings;
+        _multi = new MultiAccountUsage(_usage);
         InitializeComponent();
 
         ApplyOpacity();
@@ -55,7 +57,7 @@ public partial class MainWindow : Window
 
         // The reset countdown ticks on its own so the time left stays honest between polls.
         _countdown.Interval = TimeSpan.FromSeconds(30);
-        _countdown.Tick += (_, _) => Render(_lastGood, keepLastGood: true);
+        _countdown.Tick += (_, _) => Rerender();
     }
 
     public void AttachTray(TrayController tray) => _tray = tray;
@@ -64,29 +66,27 @@ public partial class MainWindow : Window
     {
         Reposition();
 
-        // Show the last known reading immediately, marked with when it was taken, so the
-        // pill is never blank on startup and a restart is not forced into a fresh call.
+        // Show the last known reading immediately, marked as such, so the pill is never blank
+        // on startup and a restart is not forced into a fresh call.
         if (UsageCache.Load() is { } cached)
         {
             _lastGood = cached;
-            Render(cached, keepLastGood: true);
-            MarkStale(cached, "cached");
+            RenderActiveOnly(cached with { Error = "cached" });
         }
 
         _timer.Start();
         _countdown.Start();
 
-        // Notice sign-ins from anywhere: this button, /login in a terminal, claude auth login.
+        // Notice sign-ins from anywhere: the pill's own button, /login in a terminal, anything.
         _credentials.Changed += uuid => Dispatcher.Invoke(() => OnCredentialsChanged(uuid));
 
         await RefreshAsync();
     }
 
     /// <summary>
-    /// The credential file changed. Save whatever account is now signed in — so an account
-    /// can never be signed into without ClaudeBar being able to switch back to it — and if it
-    /// is a different account, say so and refresh straight away rather than waiting for the
-    /// next poll.
+    /// The credential file changed. Save whatever account is now signed in - so an account can
+    /// never be signed into without ClaudeBar being able to switch back to it - and if it is a
+    /// different account, say so and refresh straight away rather than waiting for the poll.
     /// </summary>
     private async void OnCredentialsChanged(string? uuid)
     {
@@ -97,16 +97,9 @@ public partial class MainWindow : Window
             $"credentials changed: uuid={uuid} switched={switched} captured={captured?.Label ?? error}");
 
         if (switched && captured is not null)
-            ShowToast("Account changed", $"Now on {captured.Label}. Saved to ClaudeBar.", 0);
+            ShowToast("Account changed", $"Now on {captured.Label}.", 0);
 
-        ContextMenu = BuildMenu();
         await RefreshAsync();
-    }
-
-    private void MarkStale(UsageSnapshot snapshot, string reason)
-    {
-        Rows.Opacity = 0.55;
-        ToolTip = $"{reason} - reading taken {snapshot.FetchedAt.ToLocalTime():HH:mm:ss}";
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -124,16 +117,40 @@ public partial class MainWindow : Window
         _inFlight = new CancellationTokenSource();
         var ct = _inFlight.Token;
 
-        UsageSnapshot snapshot;
-        try { snapshot = await _usage.PollAsync(ct); }
+        UsageSnapshot active;
+        try { active = await _usage.PollAsync(ct); }
         catch (OperationCanceledException) { return; }
-
         if (ct.IsCancellationRequested) return;
 
-        ApplyBackoff(snapshot);
-        Render(snapshot, keepLastGood: false);
+        ApplyBackoff(active);
+        if (active.Ok)
+        {
+            _lastGood = active;
+            UsageCache.Save(active);
+        }
 
-        if (snapshot.Ok) UsageCache.Save(snapshot);
+        if (!_settings.ShowAllAccounts)
+        {
+            RenderActiveOnly(active.Ok || _lastGood is null ? active : _lastGood with { Error = active.Error });
+            return;
+        }
+
+        List<AccountUsage> all;
+        try { all = await _multi.PollAllAsync(active, ct); }
+        catch (OperationCanceledException) { return; }
+        if (ct.IsCancellationRequested) return;
+
+        Render(all, active);
+    }
+
+    /// <summary>The active account on its own, from a live poll or a cached reading.</summary>
+    private void RenderActiveOnly(UsageSnapshot snapshot)
+    {
+        var uuid = CredentialWatcher.CurrentUuid();
+        var account = _switcher.Accounts().FirstOrDefault(a => a.AccountUuid == uuid)
+                      ?? new StoredAccount(uuid ?? "", snapshot.Account, null, null, null, DateTimeOffset.UtcNow);
+
+        Render(new List<AccountUsage> { new(account, true, snapshot) }, snapshot);
     }
 
     /// <summary>
@@ -153,11 +170,12 @@ public partial class MainWindow : Window
 
         _consecutiveFailures++;
 
-        // Retry-After is authoritative, but only when it actually says to wait: the endpoint
-        // has been seen returning 429 with "Retry-After: 0", which would defeat the backoff.
         // First retry waits one normal interval, then doubles: 60s, 120s, 240s ... capped.
         var backoff = TimeSpan.FromSeconds(
             _settings.PollSeconds * Math.Pow(2, Math.Min(_consecutiveFailures - 1, 5)));
+
+        // Retry-After is authoritative, but only when it actually says to wait: the endpoint
+        // has been seen returning 429 with "Retry-After: 0", which would defeat the backoff.
         var wait = snapshot.RetryAfter is { TotalSeconds: > 0 } hinted && hinted > backoff
             ? hinted
             : backoff;
@@ -171,63 +189,55 @@ public partial class MainWindow : Window
             $"backoff: {snapshot.Error} failures={_consecutiveFailures} next poll in {wait.TotalSeconds:0}s");
     }
 
-    private void Render(UsageSnapshot? snapshot, bool keepLastGood)
+    private List<AccountUsage>? _lastRendered;
+
+    /// <summary>Redraws from the last data, e.g. for the reset countdown or a threshold change.</summary>
+    private void Rerender()
     {
-        if (snapshot is null) return;
+        if (_lastRendered is null) return;
+        var visible = _settings.ShowAllAccounts
+            ? _lastRendered
+            : _lastRendered.Where(a => a.IsActive).ToList();
+        Render(visible, _lastGood);
+    }
 
-        if (snapshot.Ok)
+    private void Render(List<AccountUsage> accounts, UsageSnapshot? active)
+    {
+        var withData = accounts.Where(a => a.Snapshot.HasData).ToList();
+
+        if (withData.Count > 0)
         {
-            _lastGood = snapshot;
-            var rows = snapshot.Limits
-                .Select(l => LimitRow.From(l, _settings.WarnAt, _settings.CriticalAt))
-                .ToList();
-            Rows.ItemsSource = rows;
-            Rows.Visibility = Visibility.Visible;
-            MessagePanel.Visibility = Visibility.Collapsed;
-            Rows.Opacity = 1.0;
+            if (accounts.Count >= (_lastRendered?.Count ?? 0) || _settings.ShowAllAccounts)
+                _lastRendered = accounts;
 
-            if (snapshot.Account is { Length: > 0 } who)
+            if (_settings.Mini)
             {
-                AccountLine.Text = who;
-                AccountLine.Visibility = Visibility.Visible;
+                // Just the active account's numbers, one line. Everything else collapses.
+                var activeUsage = withData.FirstOrDefault(a => a.IsActive) ?? withData[0];
+                MiniPanel.ItemsSource = activeUsage.Snapshot.Limits
+                    .Select(l => LimitRow.From(l, _settings.WarnAt, _settings.CriticalAt))
+                    .ToList();
+                MiniPanel.Visibility = Visibility.Visible;
+                Accounts.Visibility = Visibility.Collapsed;
+                ToolTip = $"{activeUsage.Account.Label} - click to expand";
             }
             else
             {
-                AccountLine.Visibility = Visibility.Collapsed;
+                Accounts.ItemsSource = withData
+                    .Select(a => AccountView.From(a, _settings.WarnAt, _settings.CriticalAt, _settings.ShowAllAccounts))
+                    .ToList();
+                Accounts.Visibility = Visibility.Visible;
+                MiniPanel.Visibility = Visibility.Collapsed;
+                ToolTip = null;
             }
-
-            var lines = new List<string>
-            {
-                snapshot.Account is { } a ? "Account: " + a : "Claude Code"
-            };
-            lines.AddRange(rows.Select(r => r.Tooltip));
-            lines.Add("Updated " + snapshot.FetchedAt.ToLocalTime().ToString("HH:mm:ss"));
-            ToolTip = string.Join(Environment.NewLine, lines);
-
-            var worst = snapshot.Worst;
-            _tray?.Update(worst is null
-                ? "ClaudeBar"
-                : worst.ShortLabel + " " + worst.Percent.ToString("0") + "%", snapshot);
-        }
-        else if (_lastGood is not null)
-        {
-            // A blip while a good reading is on screen: leave the numbers, just dim them.
-            // This dims the ROWS, never the shell: the shell's alpha belongs to the user's
-            // opacity slider, and writing it here made the pill jump back to full opacity.
-            Rows.Opacity = 0.55;
-            if (!keepLastGood)
-            {
-                ToolTip = snapshot.Error + " - showing last reading from "
-                          + _lastGood.FetchedAt.ToLocalTime().ToString("HH:mm:ss");
-                _tray?.Update("ClaudeBar - " + snapshot.Error, snapshot);
-            }
+            MessagePanel.Visibility = Visibility.Collapsed;
         }
         else
         {
-            Rows.Visibility = Visibility.Collapsed;
-            AccountLine.Visibility = Visibility.Collapsed;
+            Accounts.Visibility = Visibility.Collapsed;
+            MiniPanel.Visibility = Visibility.Collapsed;
             MessagePanel.Visibility = Visibility.Visible;
-            MessageText.Text = snapshot.Error switch
+            MessageText.Text = active?.Error switch
             {
                 "Claude Code not found" => "Claude Code not found",
                 "not signed in" or "no token" or "no subscription login" => "not signed in",
@@ -235,10 +245,20 @@ public partial class MainWindow : Window
                 "token expired" => "waiting for Claude Code",
                 "offline" => "offline",
                 "rate limited" => "rate limited - retrying",
-                _ => snapshot.Error ?? "unavailable"
+                _ => active?.Error ?? "unavailable"
             };
-            ToolTip = "ClaudeBar - right-click for options";
-            _tray?.Update("ClaudeBar - " + MessageText.Text, snapshot);
+            ToolTip = "ClaudeBar - click to switch account, right-click for options";
+        }
+
+        // The tray and its warnings follow the ACTIVE account: that is the one being used.
+        if (active is not null)
+        {
+            var worst = active.Worst;
+            _tray?.Update(
+                !active.Ok ? "ClaudeBar - " + active.Error
+                : worst is null ? "ClaudeBar"
+                : worst.ShortLabel + " " + worst.Percent.ToString("0") + "%",
+                active);
         }
 
         Topmost = true; // re-assert: other topmost windows can win the z-order over time
@@ -353,8 +373,12 @@ public partial class MainWindow : Window
         _mouseDown = false;
         ReleaseMouseCapture();
 
-        // A click that never became a drag changes nothing.
-        if (!_dragging) return;
+        // A click that never became a drag goes to whichever control is under the pointer.
+        if (!_dragging)
+        {
+            RouteClick(e.GetPosition(this));
+            return;
+        }
 
         _dragging = false;
         _ghost?.HideGhost();
@@ -379,6 +403,73 @@ public partial class MainWindow : Window
         _settings.Save();
         Reposition();
         ContextMenu = BuildMenu();
+    }
+
+    /// <summary>
+    /// Finds the tagged control under a click and acts on it. The window captures the mouse
+    /// for dragging, so elements inside the pill never receive Click themselves.
+    /// </summary>
+    private void RouteClick(Point point)
+    {
+        // The mini pill has no buttons: any click on it brings the full pill back.
+        if (_settings.Mini)
+        {
+            SetMini(false);
+            return;
+        }
+
+        var hit = VisualTreeHelper.HitTest(this, point)?.VisualHit as DependencyObject;
+
+        FrameworkElement? target = null;
+        for (var node = hit; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is FrameworkElement { Tag: string } fe)
+            {
+                target = fe;
+                break;
+            }
+        }
+        if (target is null) return;
+
+        var view = target.DataContext as AccountView;
+        switch (target.Tag as string)
+        {
+            case "switch":
+                OpenAccountPicker();
+                break;
+
+            case "toggle":
+                ToggleShowAll();
+                break;
+
+            case "mini":
+                SetMini(true);
+                break;
+
+            case "radio":
+                // In the expanded view the radios ARE the switcher.
+                if (view is { IsActive: false, ShowingAll: true } &&
+                    _switcher.Accounts().FirstOrDefault(a => a.AccountUuid == view.AccountUuid) is { } account)
+                    SwitchAccount(account);
+                break;
+        }
+    }
+
+    private void SetMini(bool mini)
+    {
+        _settings.Mini = mini;
+        _settings.Save();
+        Rerender();
+    }
+
+    private async void ToggleShowAll()
+    {
+        _settings.ShowAllAccounts = !_settings.ShowAllAccounts;
+        _settings.Save();
+
+        // Redraw from what is already known so the chevron flips at once; the poll follows.
+        Rerender();
+        await RefreshAsync();
     }
 
     // ---- menu ----------------------------------------------------------------------
@@ -425,6 +516,13 @@ public partial class MainWindow : Window
             ContextMenu = BuildMenu();
         };
         menu.Items.Add(startup);
+
+        var mini = new MenuItem
+        {
+            Header = _settings.Mini ? "Restore full pill" : "Minimize to just the numbers"
+        };
+        mini.Click += (_, _) => { SetMini(!_settings.Mini); ContextMenu = BuildMenu(); };
+        menu.Items.Add(mini);
 
         var hide = new MenuItem { Header = "Hide (tray icon keeps running)" };
         hide.Click += (_, _) => { Hide(); _settings.Visible = false; _settings.Save(); };
@@ -516,60 +614,69 @@ public partial class MainWindow : Window
     private void PopulateAccountMenu(MenuItem root)
     {
         root.Items.Clear();
+        foreach (var item in AccountItems()) root.Items.Add(item);
+    }
+
+    /// <summary>
+    /// The account picker: left-click anywhere on the pill. Same items as the submenu, one
+    /// click away instead of three.
+    /// </summary>
+    private void OpenAccountPicker()
+    {
+        var picker = new ContextMenu
+        {
+            PlacementTarget = this,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint
+        };
+        foreach (var item in AccountItems()) picker.Items.Add(item);
+        picker.IsOpen = true;
+    }
+
+    private IEnumerable<Control> AccountItems()
+    {
         var accounts = _switcher.Accounts();
-        var currentUuid = AccountStore.ReadAccountBlock()?["accountUuid"]?.GetValue<string>();
+        var currentUuid = CredentialWatcher.CurrentUuid();
 
         if (accounts.Count == 0)
         {
-            root.Items.Add(new MenuItem
-            {
-                Header = "No accounts saved yet",
-                IsEnabled = false
-            });
-        }
-        else
-        {
-            foreach (var account in accounts)
-            {
-                var isCurrent = account.AccountUuid == currentUuid;
-                var item = new MenuItem
-                {
-                    Header = account.Label + (isCurrent ? "  (current)" : ""),
-                    ToolTip = account.Detail + $" — saved {account.CapturedAt.ToLocalTime():d MMM HH:mm}",
-                    IsCheckable = true,
-                    IsChecked = isCurrent,
-                    IsEnabled = !isCurrent
-                };
-                var target = account;
-                item.Click += (_, _) => SwitchAccount(target);
-                root.Items.Add(item);
-            }
+            yield return new MenuItem { Header = "No accounts yet - sign in once and it is saved", IsEnabled = false };
         }
 
-        root.Items.Add(new Separator());
+        foreach (var account in accounts)
+        {
+            var isCurrent = account.AccountUuid == currentUuid;
+            var item = new MenuItem
+            {
+                Header = account.Label + (isCurrent ? "   (current)" : ""),
+                ToolTip = account.Detail,
+                IsCheckable = true,
+                IsChecked = isCurrent,
+                IsEnabled = !isCurrent
+            };
+            var target = account;
+            item.Click += (_, _) => SwitchAccount(target);
+            yield return item;
+        }
 
-        var save = new MenuItem
+        yield return new Separator();
+
+        var all = new MenuItem
         {
-            Header = "Save the signed-in account",
-            ToolTip = "Copies the current sign-in into ClaudeBar so it can switch back to it later."
+            Header = "Show every account's usage",
+            IsCheckable = true,
+            IsChecked = _settings.ShowAllAccounts,
+            ToolTip = "See which account has headroom before switching."
         };
-        save.Click += (_, _) =>
-        {
-            var captured = _switcher.CaptureCurrent(out var error);
-            Notify(captured is not null
-                ? $"Saved {captured.Label}"
-                : $"Could not save the account: {error}");
-            ContextMenu = BuildMenu();
-        };
-        root.Items.Add(save);
+        all.Click += (_, _) => ToggleShowAll();
+        yield return all;
 
         var add = new MenuItem
         {
-            Header = "Add another account (opens a browser)...",
-            ToolTip = "Runs: claude auth login. When it finishes, use 'Save the signed-in account'."
+            Header = "Add an account (opens a browser)...",
+            ToolTip = "Runs: claude auth login. The new account is saved automatically."
         };
         add.Click += (_, _) => StartLogin();
-        root.Items.Add(add);
+        yield return add;
     }
 
     private async void SwitchAccount(StoredAccount target)
@@ -588,7 +695,6 @@ public partial class MainWindow : Window
 
         Diagnostics.Log(() => $"switch result: ok={result.Ok} rolledBack={result.RolledBack} {result.Message}");
 
-        ContextMenu = BuildMenu();
         if (result.Ok) await RefreshAsync();
     }
 
@@ -687,7 +793,7 @@ public partial class MainWindow : Window
             _timer.Interval = interval;
 
         // Thresholds changed: recolour what is already on screen without re-polling.
-        if (_lastGood is not null) Render(_lastGood, keepLastGood: true);
+        Rerender();
     }
 
     protected override void OnClosed(EventArgs e)

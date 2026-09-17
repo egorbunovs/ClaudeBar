@@ -141,8 +141,9 @@ public sealed class TrayController : IDisposable
     }
 
     /// <summary>
-    /// A 16x16 gauge: fill height carries the value as well as the colour, so the tray icon
-    /// is still readable without relying on hue.
+    /// A 16x16 icon that shows the number itself, coloured by state and with a fill bar
+    /// under it as the second cue. Two digits are legible at tray size; 100% is drawn as a
+    /// full bar with "!!", since three digits are not.
     /// </summary>
     private static Icon Render(double? percent, int level)
     {
@@ -150,10 +151,19 @@ public sealed class TrayController : IDisposable
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             g.Clear(Color.Transparent);
 
-            using var track = new SolidBrush(Color.FromArgb(180, 42, 46, 55));
-            g.FillRectangle(track, 3, 2, 10, 12);
+            using var back = new SolidBrush(Color.FromArgb(230, 21, 25, 34));
+            using var path = RoundedRect(new Rectangle(0, 0, 15, 15), 3);
+            g.FillPath(back, path);
+
+            var colour = level switch
+            {
+                2 => Color.FromArgb(232, 121, 249), // magenta
+                1 => Color.FromArgb(251, 191, 36),  // amber
+                _ => Color.FromArgb(52, 211, 153)   // teal-green
+            };
 
             if (percent is null)
             {
@@ -162,23 +172,56 @@ public sealed class TrayController : IDisposable
             }
             else
             {
-                var colour = level switch
-                {
-                    2 => Color.FromArgb(232, 121, 249), // magenta
-                    1 => Color.FromArgb(251, 191, 36),  // amber
-                    _ => Color.FromArgb(52, 211, 153)   // teal-green
-                };
-                var height = (int)Math.Round(Math.Clamp(percent.Value, 0, 100) / 100.0 * 12);
-                if (height == 0 && percent > 0) height = 1;
+                var p = Math.Clamp(percent.Value, 0, 100);
+                var text = p >= 100 ? "!!" : ((int)Math.Round(p)).ToString();
+
+                using var family = new System.Drawing.FontFamily("Segoe UI");
+                using var font = new Font(family, p >= 100 ? 8f : 7.5f, System.Drawing.FontStyle.Bold, GraphicsUnit.Point);
+                using var ink = new SolidBrush(Color.FromArgb(255, 242, 245, 250));
+                var size = g.MeasureString(text, font);
+                g.DrawString(text, font, ink, (16 - size.Width) / 2f + 0.5f, (11 - size.Height) / 2f + 0.5f);
+
+                // The fill bar along the bottom: a second cue beside the colour.
+                using var track = new SolidBrush(Color.FromArgb(160, 60, 66, 80));
+                g.FillRectangle(track, 2, 12, 12, 2);
                 using var fill = new SolidBrush(colour);
-                g.FillRectangle(fill, 3, 2 + (12 - height), 10, height);
+                var width = (int)Math.Round(p / 100.0 * 12);
+                if (width == 0 && p > 0) width = 1;
+                g.FillRectangle(fill, 2, 12, width, 2);
             }
 
-            using var border = new Pen(Color.FromArgb(150, 255, 255, 255));
-            g.DrawRectangle(border, 3, 2, 10, 12);
+            using var border = new Pen(Color.FromArgb(90, 255, 255, 255));
+            g.DrawPath(border, path);
         }
 
+        DumpForDiagnostics(bmp, percent, level);
         return Icon.FromHandle(bmp.GetHicon());
+    }
+
+    private static GraphicsPath RoundedRect(Rectangle r, int radius)
+    {
+        var d = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    /// <summary>With CLAUDEBAR_DIAG=1, writes the icon out so it can be looked at without a tray.</summary>
+    private static void DumpForDiagnostics(Bitmap bmp, double? percent, int level)
+    {
+        if (Environment.GetEnvironmentVariable("CLAUDEBAR_DIAG") != "1") return;
+        try
+        {
+            var dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClaudeBar");
+            System.IO.Directory.CreateDirectory(dir);
+            bmp.Save(System.IO.Path.Combine(dir, $"tray-{(percent is null ? "none" : ((int)percent.Value).ToString())}-{level}.png"));
+        }
+        catch { /* diagnostics only */ }
     }
 
     public void Dispose()

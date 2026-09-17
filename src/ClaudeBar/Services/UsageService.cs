@@ -27,16 +27,24 @@ public sealed class UsageService : IDisposable
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("ClaudeBar/0.1");
     }
 
+    /// <summary>Usage for the signed-in account, using Claude Code's own live token.</summary>
     public async Task<UsageSnapshot> PollAsync(CancellationToken ct = default)
     {
         var cred = _credentials.Read();
         if (cred.State != CredentialStore.State.Ok || cred.Token is null)
             return UsageSnapshot.Failed(cred.Detail ?? "no credentials");
 
+        var snapshot = await PollWithTokenAsync(cred.Token.AccessToken, ct).ConfigureAwait(false);
+        return snapshot.Ok ? snapshot with { Account = _credentials.ReadAccountEmail() } : snapshot;
+    }
+
+    /// <summary>Usage for whichever account this token belongs to.</summary>
+    public async Task<UsageSnapshot> PollWithTokenAsync(string accessToken, CancellationToken ct = default)
+    {
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, Endpoint);
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cred.Token.AccessToken);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             using var res = await _http.SendAsync(req, ct).ConfigureAwait(false);
@@ -58,7 +66,7 @@ public sealed class UsageService : IDisposable
             var limits = Parse(body);
             return limits.Count == 0
                 ? UsageSnapshot.Failed("no limits reported")
-                : new UsageSnapshot(limits, DateTimeOffset.UtcNow, null, _credentials.ReadAccountEmail());
+                : new UsageSnapshot(limits, DateTimeOffset.UtcNow);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

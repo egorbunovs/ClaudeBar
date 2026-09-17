@@ -159,6 +159,28 @@ public sealed class AccountStore
         catch { return false; }
     }
 
+    /// <summary>
+    /// Replaces a stored account's OAuth blob after ClaudeBar refreshed it. Must be called
+    /// as soon as a refresh succeeds: the previous refresh token is already dead by then.
+    /// </summary>
+    internal bool UpdateOauth(string accountUuid, string oauthJson)
+    {
+        try
+        {
+            var path = PathFor(accountUuid);
+            if (!File.Exists(path)) return false;
+            var r = JsonSerializer.Deserialize<Record>(File.ReadAllText(path), Json);
+            if (r is null) return false;
+
+            var updated = r with { ProtectedOauth = Protect(oauthJson) };
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(updated, Json));
+            File.Move(tmp, path, overwrite: true);
+            return true;
+        }
+        catch { return false; }
+    }
+
     /// <summary>The <c>oauthAccount</c> block of ~/.claude.json, as a mutable node.</summary>
     public static JsonObject? ReadAccountBlock()
     {

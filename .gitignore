@@ -3,6 +3,9 @@ bin/
 obj/
 *.user
 
+# Working notes and local agent state - not for the public repo.
+.claude/
+
 # Published binaries: a 72MB exe does not belong in the repo.
 # It is built into release/ locally and published through GitHub Releases instead.
 release/

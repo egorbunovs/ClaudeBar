@@ -67,6 +67,9 @@ public sealed class AppSettings
     /// </summary>
     public bool ShowAllAccounts { get; set; }
 
+    /// <summary>Mini layout: one line, just the numbers. Click it to get the full pill back.</summary>
+    public bool Mini { get; set; }
+
     [JsonIgnore] public string Path { get; private set; } = "";
 
     private static readonly JsonSerializerOptions Json = new()

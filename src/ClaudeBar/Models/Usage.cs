@@ -56,6 +56,9 @@ public sealed record UsageSnapshot(
 
     public bool Ok => Error is null;
 
+    /// <summary>Rows to draw, fresh or not. A stale reading still has data; it is just dimmed.</summary>
+    public bool HasData => Limits.Count > 0;
+
     /// <summary>The window closest to its ceiling — what the colour and tray tooltip key off.</summary>
     public LimitEntry? Worst => Limits.Count == 0 ? null : Limits.MaxBy(l => l.Percent);
 }
