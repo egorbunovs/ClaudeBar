@@ -74,14 +74,12 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- Radio: filled for the active account; click an empty one to switch.
-                     Two ellipses rather than a font glyph - shapes are anti-aliased, not
-                     hinted, so the ring stays a full circle wherever the pill lands. -->
+                     Drawn on the physical pixel grid by RadioDot - see the comment there for
+                     the two ways this circle previously lost its left-hand side. -->
                 <Border Grid.Column="0" Tag="radio" Style="{StaticResource Tap}"
                         Padding="3,1,6,1" Margin="-4,0,2,0" ToolTip="{Binding RadioTip}">
-                  <Grid Width="12" Height="12" VerticalAlignment="Center">
-                    <Ellipse Stroke="{Binding RadioStroke}" StrokeThickness="1.3"/>
-                    <Ellipse Width="6" Height="6" Fill="{Binding RadioFill}"/>
-                  </Grid>
+                  <local:RadioDot Stroke="{Binding RadioStroke}" Fill="{Binding RadioFill}"
+                                  VerticalAlignment="Center"/>
                 </Border>
 
                 <TextBlock Grid.Column="1" Text="{Binding Email}" Foreground="#A9B4C8"
