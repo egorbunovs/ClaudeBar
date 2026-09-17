@@ -45,6 +45,25 @@ public static class Win {
 
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+
+    /// The pill's window is bigger than the pill by the margin its drop shadow falls into
+    /// (MainWindow.ShadowDip), in physical pixels on whichever screen it is on.
+    public static int ShadowPx(uint wanted) {
+        int px = 10;
+        EnumWindows((h, p) => {
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            if (pid != wanted || !IsWindowVisible(h)) return true;
+            var t = new System.Text.StringBuilder(256);
+            GetWindowTextW(h, t, 256);
+            if (t.ToString() == "ClaudeBar") {
+                uint dpi = GetDpiForWindow(h);
+                if (dpi > 0) px = (int)Math.Round(10.0 * dpi / 96.0);
+            }
+            return true;
+        }, IntPtr.Zero);
+        return px;
+    }
 
     /// Puts one window at the very top of the always-on-top band.
     public static void Lift(IntPtr h) {
@@ -96,6 +115,17 @@ public static class Win {
 "@ -ReferencedAssemblies System.Windows.Forms, System.Drawing, System.Drawing.Primitives, System.Collections, System.Runtime
 
 [Win]::GoDpiAware()
+
+# Absolute, and created now: .NET's idea of the working directory is not PowerShell's, so a
+# relative path here fails at the very end, after the shot has been taken.
+$Out = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Out))
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
+
+# A demo left over from a run that threw would hold the single-instance mutex and the next
+# one would exit without ever showing a window. Only demo ones - never a real ClaudeBar.
+Get-CimInstance Win32_Process -Filter "Name = 'ClaudeBar.exe'" |
+    Where-Object { $_.CommandLine -like '*--demo*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 $exeDir   = Join-Path (Split-Path -Parent $PSScriptRoot) 'src\ClaudeBar\bin\Debug\net10.0-windows'
 $settings = Join-Path $exeDir 'settings.json'
@@ -169,12 +199,15 @@ function Get-DemoWindows {
     }
 }
 
-if ($RightClick -or $Picker) {
-    $pill = Get-DemoWindows | Where-Object { $_.Title -eq 'ClaudeBar' } | Select-Object -First 1
+# The window is bigger than the pill by the shadow margin; clicks have to aim at the pill.
+$shadow = [Win]::ShadowPx($proc.Id)
+
+if ($RightClick) {
+    $w = Get-DemoWindows | Where-Object { $_.Title -eq 'ClaudeBar' } | Select-Object -First 1
     # Bottom-right corner of the pill: the menu then opens down and to the right, and the
     # pill it belongs to stays readable beside it.
-    $cx = [int]($pill.Right - 12)
-    $cy = [int]($pill.Bottom - 8)
+    $cx = [int]($w.Right - $shadow - 12)
+    $cy = [int]($w.Bottom - $shadow - 8)
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point $cx, $cy
     Start-Sleep -Milliseconds 400
     [Win]::RightClickAt($cx, $cy)
@@ -182,10 +215,10 @@ if ($RightClick -or $Picker) {
 }
 
 if ($Picker) {
-    $pill = Get-DemoWindows | Where-Object { $_.Title -eq 'ClaudeBar' } | Select-Object -First 1
+    $w = Get-DemoWindows | Where-Object { $_.Title -eq 'ClaudeBar' } | Select-Object -First 1
     # The switch button, third glyph from the right of the header line.
-    $cx = [int]($pill.Right - 84)
-    $cy = [int]($pill.Top + 21)
+    $cx = [int]($w.Right - $shadow - 84)
+    $cy = [int]($w.Top + $shadow + 21)
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point $cx, $cy
     Start-Sleep -Milliseconds 400
     [Win]::LeftClickAt($cx, $cy)
@@ -219,7 +252,6 @@ $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size $w, $h))
 $g.Dispose()
 
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
 $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 

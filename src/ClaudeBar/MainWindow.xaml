@@ -16,7 +16,13 @@
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType">
 
+  <!-- The margin is the room the drop shadow falls into. Without it the blur is clipped by
+       the window's own rectangle, which draws exactly what it sounds like: square, faintly
+       grey corners around the rounded pill. Everything that positions the pill measures the
+       shell, not the window - see MainWindow.PillBounds. Keep this in step with
+       MainWindow.ShadowDip. -->
   <Border x:Name="Shell"
+          Margin="10"
           CornerRadius="9"
           Padding="9,6,9,6"
           BorderBrush="#33FFFFFF"

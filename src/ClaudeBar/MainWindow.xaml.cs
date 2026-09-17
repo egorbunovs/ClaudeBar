@@ -345,20 +345,58 @@ public partial class MainWindow : Window
 
     private IntPtr Handle => new WindowInteropHelper(this).Handle;
 
+    /// <summary>
+    /// The transparent border around the shell, in device-independent pixels, that the drop
+    /// shadow is drawn into. Must match the Margin on Shell in MainWindow.xaml.
+    /// </summary>
+    private const double ShadowDip = 10;
+
+    /// <summary>
+    /// The same margin in physical pixels, which is what every placement calculation is in.
+    /// </summary>
+    private int ShadowPx
+    {
+        get
+        {
+            var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            if (scale <= 0 || double.IsNaN(scale)) scale = 1.0;
+            return (int)Math.Round(ShadowDip * scale);
+        }
+    }
+
+    /// <summary>
+    /// Where the pill IS, as opposed to where its window is: the window rect minus the
+    /// shadow margin. Snapping, the ghost, the free-placement offsets and the toast all work
+    /// from this, so the gap the user sees at a screen edge is the gap they asked for rather
+    /// than that plus an invisible border.
+    /// </summary>
+    private Native.Rect PillBounds
+    {
+        get
+        {
+            var b = Native.GetBounds(Handle);
+            if (b.Width == 0) return b;
+            var m = ShadowPx;
+            return new Native.Rect { Left = b.Left + m, Top = b.Top + m, Right = b.Right - m, Bottom = b.Bottom - m };
+        }
+    }
+
     public void Reposition()
     {
         UpdateLayout();
         var handle = Handle;
         if (handle == IntPtr.Zero) return;
 
-        var bounds = Native.GetBounds(handle);
+        var bounds = PillBounds;
         var width = bounds.Width > 0 ? bounds.Width : 248;
         var height = bounds.Height > 0 ? bounds.Height : 48;
 
         var monitor = ScreenService.Resolve(_settings.MonitorDeviceName);
         var (x, y) = ScreenService.Place(monitor, _settings.Anchor, width, height,
             _settings.SnapPadding, _settings.OffsetX, _settings.OffsetY);
-        Native.MoveTo(handle, x, y);
+
+        // Place the pill there; the window itself starts a shadow's width earlier.
+        Native.MoveTo(handle, x - ShadowPx, y - ShadowPx);
 
         Diagnostics.Log(() =>
             $"place: monitor={monitor.DeviceName} anchor={_settings.Anchor} " +
@@ -425,10 +463,17 @@ public partial class MainWindow : Window
         var y = cy - _dragOffsetY;
         Native.MoveTo(handle, x, y);
 
-        // Work out where letting go would put it, and show that as a ghost.
-        var monitor = ScreenService.FromPoint(x + bounds.Width / 2, y + bounds.Height / 2);
-        _pendingAnchor = ScreenService.AnchorForDrop(monitor, x, y,
-            bounds.Width, bounds.Height, _settings.SnapThreshold);
+        // Where the pill now is, inside that window, and where letting go would put it.
+        var m = ShadowPx;
+        var pillX = x + m;
+        var pillY = y + m;
+        var pill = PillBounds;
+        var width = pill.Width > 0 ? pill.Width : bounds.Width;
+        var height = pill.Height > 0 ? pill.Height : bounds.Height;
+
+        var monitor = ScreenService.FromPoint(pillX + width / 2, pillY + height / 2);
+        _pendingAnchor = ScreenService.AnchorForDrop(monitor, pillX, pillY,
+            width, height, _settings.SnapThreshold);
 
         if (_pendingAnchor == SnapAnchor.Free)
         {
@@ -437,10 +482,10 @@ public partial class MainWindow : Window
         }
 
         var (gx, gy) = ScreenService.Place(monitor, _pendingAnchor,
-            bounds.Width, bounds.Height, _settings.SnapPadding, 0, 0);
+            width, height, _settings.SnapPadding, 0, 0);
 
         _ghost ??= new GhostWindow();
-        _ghost.ShowAt(gx, gy, bounds.Width, bounds.Height);
+        _ghost.ShowAt(gx, gy, width, height);
     }
 
     private void OnDragEnd(object sender, MouseButtonEventArgs e)
@@ -460,7 +505,7 @@ public partial class MainWindow : Window
         _dragging = false;
         _ghost?.HideGhost();
 
-        var bounds = Native.GetBounds(Handle);
+        var bounds = PillBounds;
         if (bounds.Width == 0) return;
 
         var monitor = ScreenService.FromPoint(
@@ -850,7 +895,7 @@ public partial class MainWindow : Window
         Diagnostics.Log(() => $"toast[{level}]: {title} - {body}");
 
         var monitor = ScreenService.Resolve(_settings.MonitorDeviceName);
-        var pill = Native.GetBounds(Handle);
+        var pill = PillBounds;
         var bottom = pill.Height > 0 && IsVisible
             ? pill.Top - 8
             : monitor.Bottom - _settings.SnapPadding;
