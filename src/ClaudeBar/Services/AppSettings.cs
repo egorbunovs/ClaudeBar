@@ -101,6 +101,10 @@ public sealed class AppSettings
 
     public void Save()
     {
+        // A demo pill must leave nothing behind. Its clicks — expand, minimize — are staging
+        // for a screenshot, not preferences, and it may be sharing this file with a real pill.
+        if (Demo.Enabled) return;
+
         Clamp();
         foreach (var candidate in new[] { Path }.Concat(CandidatePaths()).Where(p => !string.IsNullOrEmpty(p)))
         {

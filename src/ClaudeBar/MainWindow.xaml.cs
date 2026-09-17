@@ -66,6 +66,14 @@ public partial class MainWindow : Window
     {
         Reposition();
 
+        if (Demo.Enabled)
+        {
+            // No timers, no watcher, no cache: the demo model never changes on its own, and
+            // nothing here may touch a real credential file.
+            RenderFromModel();
+            return;
+        }
+
         // Show the last known reading immediately so the pill is never blank on startup, and a
         // restart is not forced into a fresh call it would likely get a 429 for anyway.
         if (UsageCache.Load() is { } cached)
@@ -125,8 +133,10 @@ public partial class MainWindow : Window
         if (uuid is not null) _model[uuid] = snapshot;
     }
 
-    private List<AccountUsage> CurrentAccounts()
+    internal List<AccountUsage> CurrentAccounts()
     {
+        if (Demo.Enabled) return Demo.Model(_settings.ShowAllAccounts);
+
         var activeUuid = CredentialWatcher.CurrentUuid();
         var stored = _switcher.Accounts();
         var list = new List<AccountUsage>();
@@ -156,6 +166,12 @@ public partial class MainWindow : Window
     /// </param>
     public async Task RefreshAsync(bool pollActive = true)
     {
+        if (Demo.Enabled)
+        {
+            RenderFromModel();
+            return;
+        }
+
         _inFlight.Cancel();
         _inFlight = new CancellationTokenSource();
         var ct = _inFlight.Token;
@@ -507,7 +523,8 @@ public partial class MainWindow : Window
             case "radio":
                 // In the expanded view the radios ARE the switcher.
                 if (view is { IsActive: false, ShowingAll: true } &&
-                    _switcher.Accounts().FirstOrDefault(a => a.AccountUuid == view.AccountUuid) is { } account)
+                    (Demo.Enabled ? Demo.Accounts : _switcher.Accounts())
+                        .FirstOrDefault(a => a.AccountUuid == view.AccountUuid) is { } account)
                     SwitchAccount(account);
                 break;
         }
@@ -605,6 +622,15 @@ public partial class MainWindow : Window
         menu.Items.Add(settingsItem);
 
         menu.Items.Add(new Separator());
+
+        // Which build this is, where a version is looked for: bottom of the menu, not clickable.
+        menu.Items.Add(new MenuItem
+        {
+            Header = BuildInfo.MenuLabel,
+            IsEnabled = false,
+            ToolTip = "Version 1.0.<commit count>. Quote this when reporting anything."
+        });
+
         var quit = new MenuItem { Header = "Quit ClaudeBar" };
         quit.Click += (_, _) => Application.Current.Shutdown();
         menu.Items.Add(quit);
@@ -702,8 +728,8 @@ public partial class MainWindow : Window
 
     private IEnumerable<Control> AccountItems()
     {
-        var accounts = _switcher.Accounts();
-        var currentUuid = CredentialWatcher.CurrentUuid();
+        var accounts = Demo.Enabled ? Demo.Accounts : _switcher.Accounts();
+        var currentUuid = Demo.Enabled ? Demo.ActiveUuid : CredentialWatcher.CurrentUuid();
 
         if (accounts.Count == 0)
         {
@@ -749,6 +775,14 @@ public partial class MainWindow : Window
 
     private async void SwitchAccount(StoredAccount target)
     {
+        if (Demo.Enabled)
+        {
+            Demo.SwitchTo(target.AccountUuid);
+            Notify($"Switched to {target.Label}.");
+            RenderFromModel();
+            return;
+        }
+
         Notify($"Switching to {target.Label}...");
 
         // The switch shells out to `claude auth status` to verify, so keep it off the UI thread.
@@ -768,6 +802,12 @@ public partial class MainWindow : Window
 
     private void StartLogin()
     {
+        if (Demo.Enabled)
+        {
+            Notify("Demo mode: signing in is disabled.");
+            return;
+        }
+
         // Save the account being replaced first. `claude auth login` overwrites the live
         // credentials, so without this the account signed in right now could be lost.
         var outgoing = _switcher.CaptureCurrent(out _);

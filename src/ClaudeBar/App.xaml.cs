@@ -19,8 +19,15 @@ public partial class App : Application
             return;
         }
 
+        // Invented accounts for the README's screenshots. Must be set before the window is
+        // built: it decides, once, whether anything real is ever read.
+        if (e.Args.Contains("--demo")) Demo.Enable();
+
         // One pill only: a second copy would just double the polling and fight over settings.json.
-        _single = new Mutex(true, @"Local\ClaudeBar.SingleInstance", out var isFirst);
+        // A demo pill is a different thing and gets its own name, so it can sit beside a real one.
+        _single = new Mutex(true,
+            Demo.Enabled ? @"Local\ClaudeBar.Demo" : @"Local\ClaudeBar.SingleInstance",
+            out var isFirst);
         if (!isFirst)
         {
             Shutdown();
