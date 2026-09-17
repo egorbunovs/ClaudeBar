@@ -198,7 +198,7 @@ public sealed class AccountSwitcher
         }
     }
 
-    private static string? ClaudeExecutable()
+    public static string? ClaudeExecutable()
     {
         var local = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

@@ -106,13 +106,15 @@ public sealed class TrayController : IDisposable
 
         var worst = snapshot.Worst;
         var percent = worst?.Percent ?? 0;
+        // 3 = the wall itself. It gets its own announcement: "nearly gone" at 100% is wrong.
         var level = !snapshot.Ok ? -1
+            : percent >= 100 ? 3
             : percent >= _settings.CriticalAt ? 2
             : percent >= _settings.WarnAt ? 1
             : 0;
 
         var old = _current;
-        _current = Render(snapshot.Ok ? percent : null, level);
+        _current = Render(snapshot.Ok ? percent : null, Math.Min(level, 2));
         _icon.Icon = _current;
         old?.Dispose();
 
@@ -121,10 +123,19 @@ public sealed class TrayController : IDisposable
         // shell identity, which is where "Microsoft.Explorer.Notification..." came from.
         if (level > 0 && level > _lastAnnouncedLevel && snapshot.Ok && worst is not null)
         {
-            var title = level == 2 ? "Claude limit nearly gone" : "Claude limit getting close";
-            var body = $"{worst.ShortLabel} window at {percent:0}%" +
-                       (worst.ResetText.Length > 0 ? $", resets in {worst.ResetText}" : "");
-            _window.Dispatcher.Invoke(() => _window.ShowToast(title, body, level));
+            var title = level switch
+            {
+                3 => "Claude limit reached",
+                2 => "Claude limit nearly gone",
+                _ => "Claude limit getting close"
+            };
+            var body = level == 3
+                ? $"{worst.ShortLabel} window is used up" +
+                  (worst.ResetText.Length > 0 ? $" - resets in {worst.ResetText}. " : ". ") +
+                  "Switch account from the menu to carry on."
+                : $"{worst.ShortLabel} window at {percent:0}%" +
+                  (worst.ResetText.Length > 0 ? $", resets in {worst.ResetText}" : "");
+            _window.Dispatcher.Invoke(() => _window.ShowToast(title, body, Math.Min(level, 2)));
         }
         if (level >= 0) _lastAnnouncedLevel = level;
     }

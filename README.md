@@ -116,7 +116,8 @@ new terminals would need the env var set.
    back is not the one asked for.
 
 Running sessions pick the change up when their token next expires or 401s, exactly as
-`/login` behaves today. The toast says so rather than implying it is instant.
+`/login` behaves today. The toast says so rather than implying it is instant. The *pill*
+itself updates within about a second, via the watcher below.
 
 ### Where the credentials are kept
 
@@ -128,12 +129,30 @@ ever logged, shown in the UI, or put in a tooltip.
 
 Nothing credential-shaped goes in this repo; `.gitignore` blocks the shape of it.
 
-### Adding accounts
+### Adding accounts — automatic
 
-`Account → Add another account (opens a browser)...` runs `claude auth login` in a console.
-That browser round trip happens **once per account**. Then `Account → Save the signed-in
-account` copies it into the store, and from then on switching is a menu click with no
-browser.
+**Sign in however you like and ClaudeBar notices.** A `FileSystemWatcher` on
+`.credentials.json` (`CredentialWatcher`) fires within about a second of any change —
+`/login` in a terminal, `claude auth login` by hand, or `Account → Add another account`,
+which just runs `claude auth login` for you. Whatever account is then signed in is saved to
+the store and the pill refreshes immediately; if it is a different account, a toast says so.
+
+There is deliberately no separate "save" step. The first version had one, and it produced
+exactly the confusing outcome you would expect: sign in, see the pill switch, open the menu,
+and find the new account missing and the old one still marked current. The watcher removes
+the step; the menus now repopulate every time they open so they cannot go stale.
+
+The browser round trip is unavoidable **once per account** — only Anthropic can mint a
+session — but it never happens again for that account.
+
+Two more things the watcher gives for free:
+
+- it re-captures on *every* credential write, so the stored copy keeps up with the refresh
+  token Claude Code rotates as it goes;
+- before `Add another account` launches the login, the account being replaced is saved
+  first, so it can never be lost.
+
+`Account → Save the signed-in account` remains as a manual fallback.
 
 ### Proving it without risking a login
 
@@ -185,6 +204,7 @@ src/ClaudeBar/
     Usage.cs            LimitEntry, UsageSnapshot
     Account.cs          StoredAccount (identity only, never tokens)
   Services/
+    CredentialWatcher.cs notices sign-ins from anywhere and saves the account
     UsageService.cs     the /api/oauth/usage call and its parsing
     UsageCache.cs       last good reading, for restarts
     CredentialStore.cs  read-only access to .credentials.json
@@ -239,6 +259,10 @@ Windows toast system, which titles the toast with the app's AppUserModelID when 
 no registered shell identity — warnings arrived headed `Microsoft.Explorer.Notification...`
 plus a hash. `ToastWindow` draws ClaudeBar's own instead.
 
+**Menus must repopulate on open.** Built once, the Account and monitor submenus went stale
+the moment anything changed outside the menu — a login in a terminal, a monitor plugged in —
+and showed the wrong account as current. Each submenu rebuilds itself on `SubmenuOpened`.
+
 **Do not swallow exceptions silently.** `DispatcherUnhandledException` is still handled so a
 bad poll cannot kill the pill, but it logs first. Swallowing it hid a real bug for two rounds.
 
@@ -252,6 +276,11 @@ palette contains no red/green pair:
 | normal | teal-green `#34D399` | ● | few filled | shown |
 | warning (≥80%) | amber `#FBBF24` | ▲ | ~10/12 filled | shown |
 | critical (≥90%) | magenta `#E879F9` | ■ | ~11/12 filled | shown |
+| reached (100%) | magenta `#E879F9` | ■ | all filled | shown |
+
+Notifications fire once per tier on the way up: "getting close", "nearly gone", and at 100%
+"limit reached", which also says to switch account. The first version said "nearly gone" at
+100%, which is not what 100% means.
 
 The bar is **12 countable segments**, not a smooth fill, so the level reads as a quantity
 even in greyscale. The tray icon uses fill *height* as well as colour. Toasts carry the same

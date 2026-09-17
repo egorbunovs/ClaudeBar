@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly AppSettings _settings;
     private readonly UsageService _usage = new();
     private readonly AccountSwitcher _switcher = new();
+    private readonly CredentialWatcher _credentials = new();
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _countdown = new();
     private CancellationTokenSource _inFlight = new();
@@ -74,6 +75,31 @@ public partial class MainWindow : Window
 
         _timer.Start();
         _countdown.Start();
+
+        // Notice sign-ins from anywhere: this button, /login in a terminal, claude auth login.
+        _credentials.Changed += uuid => Dispatcher.Invoke(() => OnCredentialsChanged(uuid));
+
+        await RefreshAsync();
+    }
+
+    /// <summary>
+    /// The credential file changed. Save whatever account is now signed in — so an account
+    /// can never be signed into without ClaudeBar being able to switch back to it — and if it
+    /// is a different account, say so and refresh straight away rather than waiting for the
+    /// next poll.
+    /// </summary>
+    private async void OnCredentialsChanged(string? uuid)
+    {
+        var switched = _credentials.AccountChanged(uuid);
+        var captured = _switcher.CaptureCurrent(out var error);
+
+        Diagnostics.Log(() =>
+            $"credentials changed: uuid={uuid} switched={switched} captured={captured?.Label ?? error}");
+
+        if (switched && captured is not null)
+            ShowToast("Account changed", $"Now on {captured.Label}. Saved to ClaudeBar.", 0);
+
+        ContextMenu = BuildMenu();
         await RefreshAsync();
     }
 
@@ -367,57 +393,16 @@ public partial class MainWindow : Window
 
         menu.Items.Add(new Separator());
 
-        // ---- where it sits ----
+        // Every submenu repopulates when it opens. Built once, they went stale as soon as an
+        // account was added or switched from anywhere else, or a monitor was plugged in.
         var monitors = new MenuItem { Header = "Show on monitor" };
-        var active = ScreenService.Resolve(_settings.MonitorDeviceName).DeviceName;
-        foreach (var m in ScreenService.All())
-        {
-            var item = new MenuItem
-            {
-                Header = m.Label,
-                IsCheckable = true,
-                IsChecked = m.DeviceName == active
-            };
-            var device = m.DeviceName;
-            item.Click += (_, _) =>
-            {
-                _settings.MonitorDeviceName = device;
-                _settings.Save();
-                Reposition();
-                ContextMenu = BuildMenu();
-            };
-            monitors.Items.Add(item);
-        }
+        monitors.SubmenuOpened += (_, _) => PopulateMonitorMenu(monitors);
+        PopulateMonitorMenu(monitors);
         menu.Items.Add(monitors);
 
         var snap = new MenuItem { Header = "Snap to" };
-        foreach (var (anchor, label) in new[]
-                 {
-                     (SnapAnchor.BottomRight,  "Bottom right (above the clock)"),
-                     (SnapAnchor.BottomCentre, "Bottom centre"),
-                     (SnapAnchor.BottomLeft,   "Bottom left"),
-                     (SnapAnchor.TopRight,     "Top right"),
-                     (SnapAnchor.TopCentre,    "Top centre"),
-                     (SnapAnchor.TopLeft,      "Top left"),
-                     (SnapAnchor.Free,         "Free (wherever it is dropped)")
-                 })
-        {
-            var item = new MenuItem
-            {
-                Header = label,
-                IsCheckable = true,
-                IsChecked = _settings.Anchor == anchor
-            };
-            var target = anchor;
-            item.Click += (_, _) =>
-            {
-                _settings.Anchor = target;
-                _settings.Save();
-                Reposition();
-                ContextMenu = BuildMenu();
-            };
-            snap.Items.Add(item);
-        }
+        snap.SubmenuOpened += (_, _) => PopulateSnapMenu(snap);
+        PopulateSnapMenu(snap);
         menu.Items.Add(snap);
 
         var settingsPanel = new MenuItem { Header = "Settings (sliders)..." };
@@ -425,9 +410,7 @@ public partial class MainWindow : Window
         menu.Items.Add(settingsPanel);
 
         menu.Items.Add(new Separator());
-
         menu.Items.Add(BuildAccountMenu());
-
         menu.Items.Add(new Separator());
 
         var startup = new MenuItem
@@ -463,11 +446,76 @@ public partial class MainWindow : Window
         return menu;
     }
 
+    private void PopulateMonitorMenu(MenuItem monitors)
+    {
+        monitors.Items.Clear();
+        var active = ScreenService.Resolve(_settings.MonitorDeviceName).DeviceName;
+        foreach (var m in ScreenService.All())
+        {
+            var item = new MenuItem
+            {
+                Header = m.Label,
+                IsCheckable = true,
+                IsChecked = m.DeviceName == active
+            };
+            var device = m.DeviceName;
+            item.Click += (_, _) =>
+            {
+                _settings.MonitorDeviceName = device;
+                _settings.Save();
+                Reposition();
+            };
+            monitors.Items.Add(item);
+        }
+    }
+
+    private void PopulateSnapMenu(MenuItem snap)
+    {
+        snap.Items.Clear();
+        foreach (var (anchor, label) in new[]
+                 {
+                     (SnapAnchor.BottomRight,  "Bottom right (above the clock)"),
+                     (SnapAnchor.BottomCentre, "Bottom centre"),
+                     (SnapAnchor.BottomLeft,   "Bottom left"),
+                     (SnapAnchor.TopRight,     "Top right"),
+                     (SnapAnchor.TopCentre,    "Top centre"),
+                     (SnapAnchor.TopLeft,      "Top left"),
+                     (SnapAnchor.Free,         "Free (wherever it is dropped)")
+                 })
+        {
+            var item = new MenuItem
+            {
+                Header = label,
+                IsCheckable = true,
+                IsChecked = _settings.Anchor == anchor
+            };
+            var target = anchor;
+            item.Click += (_, _) =>
+            {
+                _settings.Anchor = target;
+                _settings.Save();
+                Reposition();
+            };
+            snap.Items.Add(item);
+        }
+    }
+
     // ---- account switching ---------------------------------------------------------
 
     private MenuItem BuildAccountMenu()
     {
         var root = new MenuItem { Header = "Account" };
+
+        // Repopulated every time it opens. Built once, it went stale the moment an account
+        // was added or switched from anywhere else, and showed the wrong account as current.
+        root.SubmenuOpened += (_, _) => PopulateAccountMenu(root);
+        PopulateAccountMenu(root);
+        return root;
+    }
+
+    private void PopulateAccountMenu(MenuItem root)
+    {
+        root.Items.Clear();
         var accounts = _switcher.Accounts();
         var currentUuid = AccountStore.ReadAccountBlock()?["accountUuid"]?.GetValue<string>();
 
@@ -522,8 +570,6 @@ public partial class MainWindow : Window
         };
         add.Click += (_, _) => StartLogin();
         root.Items.Add(add);
-
-        return root;
     }
 
     private async void SwitchAccount(StoredAccount target)
@@ -531,7 +577,10 @@ public partial class MainWindow : Window
         Notify($"Switching to {target.Label}...");
 
         // The switch shells out to `claude auth status` to verify, so keep it off the UI thread.
-        var result = await Task.Run(() => _switcher.SwitchTo(target));
+        _credentials.Suppressed = true;
+        AccountSwitcher.Result result;
+        try { result = await Task.Run(() => _switcher.SwitchTo(target)); }
+        finally { _credentials.Suppressed = false; }
 
         Notify(result.Ok
             ? result.Message + ". Running sessions pick this up when their token next refreshes."
@@ -545,13 +594,31 @@ public partial class MainWindow : Window
 
     private void StartLogin()
     {
+        // Save the account being replaced first. `claude auth login` overwrites the live
+        // credentials, so without this the account signed in right now could be lost.
+        var outgoing = _switcher.CaptureCurrent(out _);
+
+        var exe = AccountSwitcher.ClaudeExecutable();
+        if (exe is null)
+        {
+            Notify("Could not find claude.exe to start a login");
+            return;
+        }
+
         try
         {
-            // A visible console: this is an interactive login and the user has to see it.
-            Process.Start(new ProcessStartInfo("cmd.exe", "/k claude auth login")
-            {
-                UseShellExecute = true
-            });
+            // claude.exe directly, not `cmd /k`: the console belongs to the login and closes
+            // with it, instead of leaving a stray window behind.
+            var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+            psi.ArgumentList.Add("auth");
+            psi.ArgumentList.Add("login");
+            Process.Start(psi);
+
+            ShowToast("Signing in",
+                outgoing is null
+                    ? "Finish in the browser. ClaudeBar will save the account automatically."
+                    : $"Saved {outgoing.Label} first. Finish in the browser - the new account "
+                      + "is saved automatically.", 0);
         }
         catch (Exception ex)
         {
@@ -627,6 +694,7 @@ public partial class MainWindow : Window
     {
         _inFlight.Cancel();
         _usage.Dispose();
+        _credentials.Dispose();
         base.OnClosed(e);
     }
 }
