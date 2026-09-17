@@ -57,7 +57,7 @@ public partial class MainWindow : Window
 
         // The reset countdown ticks on its own so the time left stays honest between polls.
         _countdown.Interval = TimeSpan.FromSeconds(30);
-        _countdown.Tick += (_, _) => Rerender();
+        _countdown.Tick += (_, _) => RenderFromModel();
     }
 
     public void AttachTray(TrayController tray) => _tray = tray;
@@ -66,12 +66,13 @@ public partial class MainWindow : Window
     {
         Reposition();
 
-        // Show the last known reading immediately, marked as such, so the pill is never blank
-        // on startup and a restart is not forced into a fresh call.
+        // Show the last known reading immediately so the pill is never blank on startup, and a
+        // restart is not forced into a fresh call it would likely get a 429 for anyway.
         if (UsageCache.Load() is { } cached)
         {
             _lastGood = cached;
-            RenderActiveOnly(cached with { Error = "cached" });
+            SetActiveUsage(cached);
+            RenderFromModel();
         }
 
         _timer.Start();
@@ -81,6 +82,13 @@ public partial class MainWindow : Window
         _credentials.Changed += uuid => Dispatcher.Invoke(() => OnCredentialsChanged(uuid));
 
         await RefreshAsync();
+    }
+
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        Native.MakeToolWindow(handle); // keeps it out of Alt-Tab; it is a readout, not an app
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(Reposition));
     }
 
     /// <summary>
@@ -102,11 +110,41 @@ public partial class MainWindow : Window
         await RefreshAsync();
     }
 
-    private void OnSourceInitialized(object? sender, EventArgs e)
+    // ---- the model -----------------------------------------------------------------
+    //
+    // One entry per stored account: the latest reading ClaudeBar has for it, however old.
+    // Every render reads from here and filters by the CURRENT mode, so a fetch that finishes
+    // after the view was collapsed can update the model but can never put a second account
+    // on screen. This replaced a "last rendered list" that did exactly that.
+
+    private readonly Dictionary<string, UsageSnapshot> _model = new();
+
+    private void SetActiveUsage(UsageSnapshot snapshot)
     {
-        var handle = new WindowInteropHelper(this).Handle;
-        Native.MakeToolWindow(handle); // keeps it out of Alt-Tab; it is a readout, not an app
-        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(Reposition));
+        var uuid = CredentialWatcher.CurrentUuid();
+        if (uuid is not null) _model[uuid] = snapshot;
+    }
+
+    private List<AccountUsage> CurrentAccounts()
+    {
+        var activeUuid = CredentialWatcher.CurrentUuid();
+        var stored = _switcher.Accounts();
+        var list = new List<AccountUsage>();
+
+        // The active account first, even if it is not (yet) in the store.
+        var active = stored.FirstOrDefault(a => a.AccountUuid == activeUuid);
+        if (active is null && activeUuid is not null)
+            active = new StoredAccount(activeUuid, _lastGood?.Account, null, null, null, DateTimeOffset.UtcNow);
+        if (active is not null)
+            list.Add(new AccountUsage(active, true, _model.GetValueOrDefault(active.AccountUuid) ?? UsageSnapshot.Failed("loading")));
+
+        if (!_settings.ShowAllAccounts) return list;
+
+        foreach (var account in stored.Where(a => a.AccountUuid != activeUuid))
+            list.Add(new AccountUsage(account, false,
+                _model.GetValueOrDefault(account.AccountUuid) ?? UsageSnapshot.Failed("loading")));
+
+        return list;
     }
 
     // ---- polling -------------------------------------------------------------------
@@ -122,54 +160,61 @@ public partial class MainWindow : Window
         _inFlight = new CancellationTokenSource();
         var ct = _inFlight.Token;
 
-        UsageSnapshot active;
-        if (!pollActive && _lastGood is not null)
+        var madeACall = false;
+        if (pollActive || _lastGood is null)
         {
-            active = _lastGood;
-        }
-        else
-        {
+            UsageSnapshot active;
             try { active = await _usage.PollAsync(ct); }
             catch (OperationCanceledException) { return; }
             if (ct.IsCancellationRequested) return;
+            madeACall = true;
 
             ApplyBackoff(active);
             if (active.Ok)
             {
                 _lastGood = active;
                 UsageCache.Save(active);
+                SetActiveUsage(active);
+            }
+            else if (_lastGood is not null)
+            {
+                // Keep the last good numbers on screen, carrying the error for the tooltip.
+                SetActiveUsage(_lastGood with { Error = active.Error, RetryAfter = active.RetryAfter });
+            }
+            else
+            {
+                SetActiveUsage(active);
             }
         }
 
-        // A failed poll must not blank the active account: fall back to the last good reading,
-        // carrying the error so it renders dimmed. This applies to BOTH views - the expanded
-        // view once lost the active account entirely on a startup 429.
-        var bestActive = active.Ok || _lastGood is null
-            ? active
-            : _lastGood with { Error = active.Error, RetryAfter = active.RetryAfter };
+        RenderFromModel();
+        if (!_settings.ShowAllAccounts) return;
 
-        if (!_settings.ShowAllAccounts)
+        // The other accounts, one at a time, each drawn as soon as it arrives. Calls are
+        // spaced out because the endpoint 429s two calls a couple of seconds apart.
+        var activeUuid = CredentialWatcher.CurrentUuid();
+        foreach (var account in _switcher.Accounts().Where(a => a.AccountUuid != activeUuid))
         {
-            RenderActiveOnly(bestActive);
-            return;
+            if (madeACall)
+            {
+                try { await Task.Delay(TimeSpan.FromMilliseconds(1500), ct); }
+                catch (OperationCanceledException) { return; }
+            }
+
+            UsageSnapshot snapshot;
+            try { snapshot = await _multi.PollIdleAsync(account, ct); }
+            catch (OperationCanceledException) { return; }
+            if (ct.IsCancellationRequested) return;
+            madeACall = true;
+
+            // A failed refetch keeps the previous reading rather than replacing it with nothing.
+            if (snapshot.HasData || !_model.ContainsKey(account.AccountUuid))
+                _model[account.AccountUuid] = snapshot;
+            else if (_model[account.AccountUuid].HasData)
+                _model[account.AccountUuid] = _model[account.AccountUuid] with { Error = snapshot.Error };
+
+            RenderFromModel();
         }
-
-        List<AccountUsage> all;
-        try { all = await _multi.PollAllAsync(bestActive, ct); }
-        catch (OperationCanceledException) { return; }
-        if (ct.IsCancellationRequested) return;
-
-        Render(all, active);
-    }
-
-    /// <summary>The active account on its own, from a live poll or a cached reading.</summary>
-    private void RenderActiveOnly(UsageSnapshot snapshot)
-    {
-        var uuid = CredentialWatcher.CurrentUuid();
-        var account = _switcher.Accounts().FirstOrDefault(a => a.AccountUuid == uuid)
-                      ?? new StoredAccount(uuid ?? "", snapshot.Account, null, null, null, DateTimeOffset.UtcNow);
-
-        Render(new List<AccountUsage> { new(account, true, snapshot) }, snapshot);
     }
 
     /// <summary>
@@ -208,59 +253,50 @@ public partial class MainWindow : Window
             $"backoff: {snapshot.Error} failures={_consecutiveFailures} next poll in {wait.TotalSeconds:0}s");
     }
 
-    private List<AccountUsage>? _lastRendered;
+    // ---- rendering -----------------------------------------------------------------
 
-    /// <summary>Redraws from the last data, e.g. for the reset countdown or a threshold change.</summary>
-    private void Rerender()
+    /// <summary>Draws whatever the model knows, filtered by the current mode. The only render path.</summary>
+    private void RenderFromModel()
     {
-        if (_lastRendered is null) return;
-        var visible = _settings.ShowAllAccounts
-            ? _lastRendered
-            : _lastRendered.Where(a => a.IsActive).ToList();
-        Render(visible, _lastGood);
-    }
-
-    private void Render(List<AccountUsage> accounts, UsageSnapshot? active)
-    {
-        var withData = accounts.Where(a => a.Snapshot.HasData).ToList();
+        var accounts = CurrentAccounts();
+        var active = accounts.FirstOrDefault(a => a.IsActive);
 
         Diagnostics.Log(() =>
-            $"render: showAll={_settings.ShowAllAccounts} mini={_settings.Mini} in={accounts.Count} " +
-            $"withData={withData.Count} [{string.Join(", ", accounts.Select(a => $"{a.Account.Label}:{(a.IsActive ? "active" : "idle")}:{(a.Snapshot.Ok ? "ok" : a.Snapshot.Error)}:{a.Snapshot.Limits.Count}"))}]");
+            $"render: showAll={_settings.ShowAllAccounts} mini={_settings.Mini} " +
+            $"[{string.Join(", ", accounts.Select(a => $"{a.Account.Label}:{(a.IsActive ? "active" : "idle")}:{a.Snapshot.Error ?? "ok"}:{a.Snapshot.Limits.Count}"))}]");
 
-        if (withData.Count > 0)
+        var anyData = accounts.Any(a => a.Snapshot.HasData);
+
+        if (anyData && _settings.Mini)
         {
-            if (accounts.Count >= (_lastRendered?.Count ?? 0) || _settings.ShowAllAccounts)
-                _lastRendered = accounts;
-
-            if (_settings.Mini)
-            {
-                // Just the active account's numbers, one line. Everything else collapses.
-                var activeUsage = withData.FirstOrDefault(a => a.IsActive) ?? withData[0];
-                MiniPanel.ItemsSource = activeUsage.Snapshot.Limits
-                    .Select(l => LimitRow.From(l, _settings.WarnAt, _settings.CriticalAt))
-                    .ToList();
-                MiniPanel.Visibility = Visibility.Visible;
-                Accounts.Visibility = Visibility.Collapsed;
-                ToolTip = $"{activeUsage.Account.Label} - click to expand";
-            }
-            else
-            {
-                Accounts.ItemsSource = withData
-                    .Select(a => AccountView.From(a, _settings.WarnAt, _settings.CriticalAt, _settings.ShowAllAccounts))
-                    .ToList();
-                Accounts.Visibility = Visibility.Visible;
-                MiniPanel.Visibility = Visibility.Collapsed;
-                ToolTip = null;
-            }
+            // Just the active account's numbers, one line. Everything else collapses.
+            var source = active is { Snapshot.HasData: true } ? active : accounts.First(a => a.Snapshot.HasData);
+            MiniRows.ItemsSource = source.Snapshot.Limits
+                .Select(l => LimitRow.From(l, _settings.WarnAt, _settings.CriticalAt))
+                .ToList();
+            MiniPanel.Visibility = Visibility.Visible;
+            Accounts.Visibility = Visibility.Collapsed;
             MessagePanel.Visibility = Visibility.Collapsed;
+            ToolTip = source.Account.Label;
+        }
+        else if (anyData)
+        {
+            // Sections for every account in the current mode. An account with no reading yet
+            // still gets its header, marked "loading", so expanding shows the list at once.
+            Accounts.ItemsSource = accounts
+                .Select(a => AccountView.From(a, _settings.WarnAt, _settings.CriticalAt, _settings.ShowAllAccounts))
+                .ToList();
+            Accounts.Visibility = Visibility.Visible;
+            MiniPanel.Visibility = Visibility.Collapsed;
+            MessagePanel.Visibility = Visibility.Collapsed;
+            ToolTip = null;
         }
         else
         {
             Accounts.Visibility = Visibility.Collapsed;
             MiniPanel.Visibility = Visibility.Collapsed;
             MessagePanel.Visibility = Visibility.Visible;
-            MessageText.Text = active?.Error switch
+            MessageText.Text = active?.Snapshot.Error switch
             {
                 "Claude Code not found" => "Claude Code not found",
                 "not signed in" or "no token" or "no subscription login" => "not signed in",
@@ -268,20 +304,22 @@ public partial class MainWindow : Window
                 "token expired" => "waiting for Claude Code",
                 "offline" => "offline",
                 "rate limited" => "rate limited - retrying",
-                _ => active?.Error ?? "unavailable"
+                "loading" => "starting…",
+                _ => active?.Snapshot.Error ?? "unavailable"
             };
-            ToolTip = "ClaudeBar - click to switch account, right-click for options";
+            ToolTip = "ClaudeBar - right-click for options";
         }
 
         // The tray and its warnings follow the ACTIVE account: that is the one being used.
         if (active is not null)
         {
-            var worst = active.Worst;
+            var snap = active.Snapshot;
+            var worst = snap.Worst;
             _tray?.Update(
-                !active.Ok ? "ClaudeBar - " + active.Error
+                !snap.HasData ? "ClaudeBar - " + (snap.Error ?? "starting")
                 : worst is null ? "ClaudeBar"
                 : worst.ShortLabel + " " + worst.Percent.ToString("0") + "%",
-                active);
+                snap.HasData && !snap.Ok ? snap with { Error = null } : snap);
         }
 
         Topmost = true; // re-assert: other topmost windows can win the z-order over time
@@ -434,13 +472,6 @@ public partial class MainWindow : Window
     /// </summary>
     private void RouteClick(Point point)
     {
-        // The mini pill has no buttons: any click on it brings the full pill back.
-        if (_settings.Mini)
-        {
-            SetMini(false);
-            return;
-        }
-
         var hit = VisualTreeHelper.HitTest(this, point)?.VisualHit as DependencyObject;
 
         FrameworkElement? target = null;
@@ -469,6 +500,10 @@ public partial class MainWindow : Window
                 SetMini(true);
                 break;
 
+            case "restore":
+                SetMini(false);
+                break;
+
             case "radio":
                 // In the expanded view the radios ARE the switcher.
                 if (view is { IsActive: false, ShowingAll: true } &&
@@ -482,7 +517,7 @@ public partial class MainWindow : Window
     {
         _settings.Mini = mini;
         _settings.Save();
-        Rerender();
+        RenderFromModel();
     }
 
     private async void ToggleShowAll()
@@ -490,10 +525,19 @@ public partial class MainWindow : Window
         _settings.ShowAllAccounts = !_settings.ShowAllAccounts;
         _settings.Save();
 
-        // Redraw from what is already known so the chevron flips at once. Expanding then
-        // fetches the OTHER accounts only; the active one is not re-polled.
-        Rerender();
-        if (_settings.ShowAllAccounts) await RefreshAsync(pollActive: false);
+        if (!_settings.ShowAllAccounts)
+        {
+            // Collapsing: stop any fetch that expanding started, and draw the active account.
+            _inFlight.Cancel();
+            RenderFromModel();
+            return;
+        }
+
+        // Expanding: every account appears at once (from the model, or "loading"), and the
+        // ones without a reading are fetched and drawn as they arrive. The active account
+        // is not re-polled - it is already on screen.
+        RenderFromModel();
+        await RefreshAsync(pollActive: false);
     }
 
     // ---- menu ----------------------------------------------------------------------
@@ -817,7 +861,7 @@ public partial class MainWindow : Window
             _timer.Interval = interval;
 
         // Thresholds changed: recolour what is already on screen without re-polling.
-        Rerender();
+        RenderFromModel();
     }
 
     protected override void OnClosed(EventArgs e)

@@ -149,24 +149,46 @@
         </ItemsControl.ItemTemplate>
       </ItemsControl>
 
-      <!-- Mini layout: the active account's numbers on one line. Click to restore. -->
-      <ItemsControl x:Name="MiniPanel" Visibility="Collapsed" ToolTip="Click to expand">
-        <ItemsControl.ItemsPanel>
-          <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-        </ItemsControl.ItemsPanel>
-        <ItemsControl.ItemTemplate>
-          <DataTemplate>
-            <StackPanel Orientation="Horizontal" Margin="0,0,7,0" ToolTip="{Binding Tooltip}">
-              <TextBlock Text="{Binding Label}" Foreground="#9AA5B8" FontFamily="Segoe UI"
-                         FontSize="10.5" VerticalAlignment="Center" Margin="0,0,4,0"/>
-              <TextBlock Text="{Binding Glyph}" Foreground="{Binding Accent}" FontSize="9"
-                         VerticalAlignment="Center" Margin="0,0,4,0"/>
-              <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA" FontFamily="Segoe UI"
-                         FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
-            </StackPanel>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
+      <!-- Mini layout: the active account's numbers on one line, plus a restore button. -->
+      <StackPanel x:Name="MiniPanel" Orientation="Horizontal" Visibility="Collapsed">
+        <StackPanel.Resources>
+          <Style x:Key="Tap" TargetType="Border">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Style.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#22FFFFFF"/>
+              </Trigger>
+            </Style.Triggers>
+          </Style>
+        </StackPanel.Resources>
+
+        <ItemsControl x:Name="MiniRows">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Orientation="Horizontal" Margin="0,0,8,0" ToolTip="{Binding Tooltip}">
+                <TextBlock Text="{Binding Label}" Foreground="#9AA5B8" FontFamily="Segoe UI"
+                           FontSize="10.5" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <TextBlock Text="{Binding Glyph}" Foreground="{Binding Accent}" FontSize="9"
+                           VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA" FontFamily="Segoe UI"
+                           FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Segoe MDL2 Assets: ChromeMaximize. -->
+        <Border Tag="restore" Style="{StaticResource Tap}" Padding="6,2,5,2" Margin="2,0,-4,0"
+                VerticalAlignment="Center" ToolTip="Restore the full pill">
+          <TextBlock Text="&#xE922;" Foreground="#C8D2E4"
+                     FontFamily="Segoe MDL2 Assets" FontSize="11" VerticalAlignment="Center"/>
+        </Border>
+      </StackPanel>
 
       <!-- Degraded state: Claude Code missing, signed out, or offline. Never a crash. -->
       <StackPanel x:Name="MessagePanel" Orientation="Horizontal" Visibility="Visible">
