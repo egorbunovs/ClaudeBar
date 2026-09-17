@@ -48,10 +48,11 @@ public sealed record UsageSnapshot(
     IReadOnlyList<LimitEntry> Limits,
     DateTimeOffset FetchedAt,
     string? Error = null,
-    string? Account = null)
+    string? Account = null,
+    TimeSpan? RetryAfter = null)
 {
-    public static UsageSnapshot Failed(string error) =>
-        new(Array.Empty<LimitEntry>(), DateTimeOffset.UtcNow, error);
+    public static UsageSnapshot Failed(string error, TimeSpan? retryAfter = null) =>
+        new(Array.Empty<LimitEntry>(), DateTimeOffset.UtcNow, error, null, retryAfter);
 
     public bool Ok => Error is null;
 

@@ -20,13 +20,14 @@ public partial class MainWindow : Window
     private UsageSnapshot? _lastGood;
     private TrayController? _tray;
     private bool _dragging;
+    private int _consecutiveFailures;
 
     public MainWindow(AppSettings settings)
     {
         _settings = settings;
         InitializeComponent();
 
-        Shell.Opacity = _settings.Opacity;
+        ApplyBackgroundOpacity();
         ContextMenu = BuildMenu();
 
         MouseLeftButtonDown += OnDrag;
@@ -51,9 +52,25 @@ public partial class MainWindow : Window
     private async void OnLoaded(object? sender, RoutedEventArgs e)
     {
         Reposition();
+
+        // Show the last known reading immediately, marked with when it was taken, so the
+        // pill is never blank on startup and a restart is not forced into a fresh call.
+        if (UsageCache.Load() is { } cached)
+        {
+            _lastGood = cached;
+            Render(cached, keepLastGood: true);
+            MarkStale(cached, "cached");
+        }
+
         _timer.Start();
         _countdown.Start();
         await RefreshAsync();
+    }
+
+    private void MarkStale(UsageSnapshot snapshot, string reason)
+    {
+        Shell.Opacity = 0.55;
+        ToolTip = $"{reason} - reading taken {snapshot.FetchedAt.ToLocalTime():HH:mm:ss}";
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -76,7 +93,46 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) { return; }
 
         if (ct.IsCancellationRequested) return;
+
+        ApplyBackoff(snapshot);
         Render(snapshot, keepLastGood: false);
+
+        if (snapshot.Ok) UsageCache.Save(snapshot);
+    }
+
+    /// <summary>
+    /// Spaces polls out after failures instead of retrying at full rate. Matters most for
+    /// HTTP 429: the endpoint rate-limits, and hammering it only extends the penalty.
+    /// </summary>
+    private void ApplyBackoff(UsageSnapshot snapshot)
+    {
+        var normal = TimeSpan.FromSeconds(_settings.PollSeconds);
+
+        if (snapshot.Ok)
+        {
+            _consecutiveFailures = 0;
+            if (_timer.Interval != normal) _timer.Interval = normal;
+            return;
+        }
+
+        _consecutiveFailures++;
+
+        // Retry-After is authoritative, but only when it actually says to wait: the endpoint
+        // has been seen returning 429 with "Retry-After: 0", which would defeat the backoff.
+        // First retry waits one normal interval, then doubles: 60s, 120s, 240s ... capped.
+        var backoff = TimeSpan.FromSeconds(
+            _settings.PollSeconds * Math.Pow(2, Math.Min(_consecutiveFailures - 1, 5)));
+        var wait = snapshot.RetryAfter is { TotalSeconds: > 0 } hinted && hinted > backoff
+            ? hinted
+            : backoff;
+
+        var capped = TimeSpan.FromMinutes(15);
+        if (wait > capped) wait = capped;
+        if (wait < normal) wait = normal;
+
+        _timer.Interval = wait;
+        Diagnostics.Log(() =>
+            $"backoff: {snapshot.Error} failures={_consecutiveFailures} next poll in {wait.TotalSeconds:0}s");
     }
 
     private void Render(UsageSnapshot? snapshot, bool keepLastGood)
@@ -92,7 +148,7 @@ public partial class MainWindow : Window
             Rows.ItemsSource = rows;
             Rows.Visibility = Visibility.Visible;
             MessagePanel.Visibility = Visibility.Collapsed;
-            Shell.Opacity = _settings.Opacity;
+            Shell.Opacity = 1.0;
 
             var lines = new List<string>
             {
@@ -110,7 +166,7 @@ public partial class MainWindow : Window
         else if (_lastGood is not null)
         {
             // A blip while a good reading is on screen: leave the numbers, just dim them.
-            Shell.Opacity = Math.Max(0.4, _settings.Opacity - 0.25);
+            Shell.Opacity = 0.55;
             if (!keepLastGood)
             {
                 ToolTip = snapshot.Error + " - showing last reading from "
@@ -129,6 +185,7 @@ public partial class MainWindow : Window
                 "signed out" => "signed out - run /login",
                 "token expired" => "waiting for Claude Code",
                 "offline" => "offline",
+                "rate limited" => "rate limited - retrying",
                 _ => snapshot.Error ?? "unavailable"
             };
             ToolTip = "ClaudeBar - right-click for options";
@@ -153,12 +210,13 @@ public partial class MainWindow : Window
         var height = bounds.Height > 0 ? bounds.Height : 48;
 
         var monitor = ScreenService.Resolve(_settings.MonitorDeviceName);
-        var (x, y) = ScreenService.AboveClock(monitor, width, height,
-            _settings.OffsetX, _settings.OffsetY);
+        var (x, y) = ScreenService.Place(monitor, _settings.Anchor, width, height,
+            _settings.SnapPadding, _settings.OffsetX, _settings.OffsetY);
         Native.MoveTo(handle, x, y);
 
         Diagnostics.Log(() =>
-            $"place: monitor={monitor.DeviceName} work=({monitor.Left},{monitor.Top})-" +
+            $"place: monitor={monitor.DeviceName} anchor={_settings.Anchor} " +
+            $"pad={_settings.SnapPadding} work=({monitor.Left},{monitor.Top})-" +
             $"({monitor.Right},{monitor.Bottom}) size={width}x{height} -> ({x},{y})");
     }
 
@@ -181,10 +239,18 @@ public partial class MainWindow : Window
             bounds.Top + bounds.Height / 2);
 
         _settings.MonitorDeviceName = monitor.DeviceName;
-        _settings.OffsetX = monitor.Right - bounds.Right;
-        _settings.OffsetY = monitor.Bottom - bounds.Bottom;
-        _settings.PositionPinned = true;
+        _settings.Anchor = ScreenService.AnchorForDrop(monitor, bounds.Left, bounds.Top,
+            bounds.Width, bounds.Height, _settings.SnapThreshold);
+
+        // Free placement keeps the exact drop position; a snapped one is re-laid out.
+        if (_settings.Anchor == SnapAnchor.Free)
+        {
+            _settings.OffsetX = monitor.Right - bounds.Right;
+            _settings.OffsetY = monitor.Bottom - bounds.Bottom;
+        }
+
         _settings.Save();
+        Reposition();
         ContextMenu = BuildMenu();
     }
 
@@ -198,6 +264,9 @@ public partial class MainWindow : Window
         refresh.Click += async (_, _) => await RefreshAsync();
         menu.Items.Add(refresh);
 
+        menu.Items.Add(new Separator());
+
+        // ---- where it sits ----
         var monitors = new MenuItem { Header = "Show on monitor" };
         var active = ScreenService.Resolve(_settings.MonitorDeviceName).DeviceName;
         foreach (var m in ScreenService.All())
@@ -212,8 +281,6 @@ public partial class MainWindow : Window
             item.Click += (_, _) =>
             {
                 _settings.MonitorDeviceName = device;
-                _settings.OffsetX = 12;
-                _settings.OffsetY = 12;
                 _settings.Save();
                 Reposition();
                 ContextMenu = BuildMenu();
@@ -222,16 +289,53 @@ public partial class MainWindow : Window
         }
         menu.Items.Add(monitors);
 
-        var reset = new MenuItem { Header = "Reset to above the clock" };
-        reset.Click += (_, _) =>
+        var snap = new MenuItem { Header = "Snap to" };
+        foreach (var (anchor, label) in new[]
+                 {
+                     (SnapAnchor.BottomRight,  "Bottom right (above the clock)"),
+                     (SnapAnchor.BottomCentre, "Bottom centre"),
+                     (SnapAnchor.BottomLeft,   "Bottom left"),
+                     (SnapAnchor.TopRight,     "Top right"),
+                     (SnapAnchor.TopCentre,    "Top centre"),
+                     (SnapAnchor.TopLeft,      "Top left"),
+                     (SnapAnchor.Free,         "Free (wherever it is dropped)")
+                 })
         {
-            _settings.OffsetX = 12;
-            _settings.OffsetY = 12;
-            _settings.PositionPinned = false;
-            _settings.Save();
-            Reposition();
-        };
-        menu.Items.Add(reset);
+            var item = new MenuItem
+            {
+                Header = label,
+                IsCheckable = true,
+                IsChecked = _settings.Anchor == anchor
+            };
+            var target = anchor;
+            item.Click += (_, _) =>
+            {
+                _settings.Anchor = target;
+                _settings.Save();
+                Reposition();
+                ContextMenu = BuildMenu();
+            };
+            snap.Items.Add(item);
+        }
+        snap.Items.Add(new Separator());
+        snap.Items.Add(SliderItem("Padding", _settings.SnapPadding, 0, 64, 1,
+            v => $"{v:0} px",
+            v => { _settings.SnapPadding = (int)v; Reposition(); },
+            () => _settings.Save()));
+        snap.Items.Add(SliderItem("Snap distance", _settings.SnapThreshold, 0, 200, 4,
+            v => v <= 0 ? "off" : $"{v:0} px",
+            v => _settings.SnapThreshold = (int)v,
+            () => _settings.Save()));
+        menu.Items.Add(snap);
+
+        // ---- how it looks ----
+        var look = new MenuItem { Header = "Appearance" };
+        look.Items.Add(SliderItem("Background", _settings.BackgroundOpacity * 100, 0, 100, 5,
+            v => $"{v:0}%",
+            v => { _settings.BackgroundOpacity = v / 100.0; ApplyBackgroundOpacity(); },
+            () => _settings.Save()));
+        menu.Items.Add(look);
+
         menu.Items.Add(new Separator());
 
         var switcher = new MenuItem
@@ -241,6 +345,17 @@ public partial class MainWindow : Window
             ToolTip = "Next up - the credential swap is designed but not wired yet."
         };
         menu.Items.Add(switcher);
+
+        var allAccounts = new MenuItem
+        {
+            Header = "Show all accounts",
+            IsCheckable = true,
+            IsChecked = _settings.ShowAllAccounts,
+            IsEnabled = false,
+            ToolTip = "Available once accounts can be added - see README, Phase 2."
+        };
+        menu.Items.Add(allAccounts);
+
         menu.Items.Add(new Separator());
 
         var startup = new MenuItem
@@ -276,6 +391,60 @@ public partial class MainWindow : Window
 
         return menu;
     }
+
+    /// <summary>
+    /// A menu row carrying a live slider. Changes apply as it is dragged so the effect is
+    /// visible while choosing, and are saved once on release rather than on every tick.
+    /// </summary>
+    private static MenuItem SliderItem(string label, double value, double min, double max,
+        double tick, Func<double, string> format, Action<double> onChange, Action onCommit)
+    {
+        var text = new TextBlock
+        {
+            Text = label,
+            Width = 96,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var readout = new TextBlock
+        {
+            Text = format(value),
+            Width = 44,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0.75
+        };
+
+        var slider = new Slider
+        {
+            Minimum = min,
+            Maximum = max,
+            Value = Math.Clamp(value, min, max),
+            TickFrequency = tick,
+            IsSnapToTickEnabled = true,
+            Width = 130,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 6, 0)
+        };
+
+        slider.ValueChanged += (_, e) =>
+        {
+            readout.Text = format(e.NewValue);
+            onChange(e.NewValue);
+        };
+        slider.PreviewMouseUp += (_, _) => onCommit();
+        slider.LostMouseCapture += (_, _) => onCommit();
+
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(text);
+        panel.Children.Add(slider);
+        panel.Children.Add(readout);
+
+        // Without this the menu closes the moment the slider is grabbed.
+        return new MenuItem { Header = panel, StaysOpenOnClick = true };
+    }
+
+    private void ApplyBackgroundOpacity() => ShellFill.Opacity = _settings.BackgroundOpacity;
 
     protected override void OnClosed(EventArgs e)
     {

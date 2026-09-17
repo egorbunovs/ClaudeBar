@@ -44,6 +44,13 @@ public sealed class UsageService : IDisposable
             if (res.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 // Deliberately NOT refreshing: that rotates the refresh token under Claude Code.
                 return UsageSnapshot.Failed("signed out");
+
+            // The endpoint rate-limits. Polling all day, and especially restarting often,
+            // will hit it, so respect Retry-After and let the caller back off rather than
+            // hammering it into a longer penalty.
+            if (res.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
+                return UsageSnapshot.Failed("rate limited", RetryAfterOf(res));
+
             if (!res.IsSuccessStatusCode)
                 return UsageSnapshot.Failed($"http {(int)res.StatusCode}");
 
@@ -62,6 +69,19 @@ public sealed class UsageService : IDisposable
             // Offline, DNS down, laptop asleep: keep the last good reading on screen.
             return UsageSnapshot.Failed("offline");
         }
+    }
+
+    private static TimeSpan? RetryAfterOf(HttpResponseMessage res)
+    {
+        var header = res.Headers.RetryAfter;
+        if (header is null) return null;
+        if (header.Delta is { } delta) return delta;
+        if (header.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero) return wait;
+        }
+        return null;
     }
 
     internal static List<LimitEntry> Parse(string json)

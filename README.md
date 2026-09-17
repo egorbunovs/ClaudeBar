@@ -67,6 +67,15 @@ appearing should just show up as a third row, not a crash.
 `UsageService.Parse` falls back to `five_hour`/`seven_day` if `limits[]` ever
 goes missing, and the pill degrades to a plain message if both do.
 
+**The endpoint rate-limits.** It returns HTTP 429 if polled too often — easy to hit while
+developing, since every restart polls immediately. Worth knowing: it has been seen
+returning `Retry-After: 0` alongside a 429, so that header cannot be trusted on its own.
+ClaudeBar therefore backs off exponentially (capped at 15 minutes), only honours
+`Retry-After` when it is longer than its own backoff, and caches the last good reading to
+`%LOCALAPPDATA%\ClaudeBar\last-usage.json` so a restart shows something familiar instead
+of an empty pill and a fresh call. Cached readings are shown dimmed, with their timestamp
+in the tooltip — never presented as current.
+
 **Token handling.** ClaudeBar only ever *reads* `.credentials.json`. It
 deliberately does **not** refresh the token: a refresh rotates the refresh
 token, and racing Claude Code for that is how an account gets logged out for
@@ -119,12 +128,17 @@ per account, and new terminals would need the env var set. Not worth it.
    token next expires or 401s, exactly as `/login` behaves today. The UI should
    say that rather than implying it is instant.
 
-**Open question:** should the pill show usage for the *active* account
-only, or for *all* stored accounts at once, so you can see which one has
-headroom before switching? All-accounts is possible — each stored token can be
-queried independently — but it means ClaudeBar refreshes idle accounts' tokens
-itself, which is the one place the "never refresh" rule above would have to be
-relaxed (safely, since Claude Code is not using those accounts concurrently).
+**Decided:** the pill will show usage for **all stored accounts**, with a menu toggle
+(`ShowAllAccounts`) to fall back to the active account only. The setting and its menu
+item exist already but are disabled, because there is nothing to show until accounts can
+be added — it lands with the switcher.
+
+This is the one place the "never refresh a token" rule above gets relaxed: an idle
+account's access token expires after ~8h, so ClaudeBar has to refresh it to read its
+usage. That is safe precisely because the account is idle — Claude Code is not using it
+concurrently, so there is no race over the rotating refresh token. ClaudeBar writes the
+rotated token straight back to its own slot. The rule stays absolute for the *active*
+account.
 
 Nothing credential-shaped goes in this repo; `.gitignore` covers it from the
 first commit.
@@ -177,6 +191,26 @@ ClaudeBar now uses physical pixels end to end: monitors come from
 otherwise it grows rightward off its corner when the first reading replaces
 "starting…".
 
+### Snapping
+
+Placement is anchor-based rather than free-floating: `BottomRight` (above the clock),
+`BottomLeft`, `TopRight`, `TopLeft`, `BottomCentre`, `TopCentre`, or `Free`. Dropping the
+pill within `SnapThreshold` physical pixels of an edge or corner snaps it there and
+remembers the anchor; dropping it in open space keeps the exact position as `Free`.
+`SnapPadding` is the gap it keeps from the edges it is snapped to. Because the working
+area excludes the taskbar, a bottom anchor snaps to the taskbar's edge where there is one
+and the screen edge where there is not. Both values have sliders in the right-click menu.
+
+### Why the bar is drawn by hand
+
+`SegmentBar` renders the segments in `OnRender` instead of using an `ItemsControl` of
+`Rectangle`s. The control version looked subtly wrong and it was not imagination: at 125%
+scaling a 6px rectangle is 7.5 physical pixels, so WPF rounded some segments to 7 and
+others to 8, and accumulated fractional offsets shifted one row against the next. Segment
+widths, gaps and x positions are now computed in **whole physical pixels** and converted
+back to device-independent units only to draw, so every segment is identical and the rows
+line up exactly.
+
 ## Colour, and not relying on it
 
 This is built for a red/green colour blind user, so **every state carries three
@@ -203,10 +237,10 @@ dotnet publish -c Release                    # self-contained single exe
 CLAUDEBAR_DIAG=1 dotnet run                  # trace placement to %LOCALAPPDATA%\ClaudeBar\diag.log
 ```
 
-Right-click the pill (or the tray icon) for: refresh, **which monitor to show
-on**, reset to above the clock, start with Windows, hide, open settings.json,
-quit. Left-click-drag moves it; where it lands is remembered per monitor.
-Left-click the tray icon to show/hide.
+Right-click the pill (or the tray icon) for: refresh, **which monitor to show on**,
+**snap position + padding sliders**, **background opacity slider**, start with Windows,
+hide, open settings.json, quit. Left-click-drag moves it, snapping to whichever edge or
+corner it is dropped near. Left-click the tray icon to show/hide.
 
 ### settings.json
 
@@ -214,11 +248,15 @@ Written next to the exe, or `%LOCALAPPDATA%\ClaudeBar\` if that is read-only.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `MonitorDeviceName` | primary | which monitor to park on, e.g. `\\.\DISPLAY2` |
-| `OffsetX` / `OffsetY` | 12 | physical-pixel inset from that monitor's bottom-right |
-| `PollSeconds` | 60 | clamped 15–3600 |
+| `MonitorDeviceName` | primary | which monitor to park on, e.g. `\.\DISPLAY2` |
+| `Anchor` | `BottomRight` | edge/corner to snap to, or `Free` |
+| `SnapPadding` | 12 | physical-pixel gap from the snapped edges |
+| `SnapThreshold` | 64 | how near an edge a drop must land to snap (0 = off) |
+| `OffsetX` / `OffsetY` | 12 | inset from bottom-right, used only when `Anchor` is `Free` |
+| `PollSeconds` | 60 | clamped 15–3600; backs off on failure, up to 15 min |
 | `WarnAt` / `CriticalAt` | 70 / 90 | threshold percentages |
-| `Opacity` | 0.94 | clamped 0.35–1.0 |
+| `BackgroundOpacity` | 0.92 | background alpha only — text stays fully opaque |
+| `ShowAllAccounts` | false | Phase 2; no effect until accounts can be added |
 | `Visible` | true | remembered across restarts |
 
 ### Behaviour when things are missing

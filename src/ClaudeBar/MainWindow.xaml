@@ -1,6 +1,7 @@
 <Window x:Class="ClaudeBar.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ClaudeBar"
         Title="ClaudeBar"
         SizeToContent="WidthAndHeight"
         WindowStyle="None"
@@ -11,15 +12,19 @@
         Topmost="True"
         ResizeMode="NoResize"
         UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType">
 
   <Border x:Name="Shell"
           CornerRadius="9"
           Padding="9,6,9,6"
-          Background="#EB151922"
           BorderBrush="#33FFFFFF"
           BorderThickness="1">
+    <Border.Background>
+      <!-- Alpha is driven by the opacity slider in the right-click menu. -->
+      <SolidColorBrush x:Name="ShellFill" Color="#151922" Opacity="0.92"/>
+    </Border.Background>
     <Border.Effect>
       <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.45" Color="Black"/>
     </Border.Effect>
@@ -29,43 +34,43 @@
       <ItemsControl x:Name="Rows" Visibility="Collapsed">
         <ItemsControl.ItemTemplate>
           <DataTemplate>
-            <Grid Margin="0,1,0,1" ToolTip="{Binding Tooltip}">
+            <Grid Margin="0,1.5,0,1.5" ToolTip="{Binding Tooltip}">
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="22"/>
-                <ColumnDefinition Width="14"/>
+                <ColumnDefinition Width="24"/>
+                <ColumnDefinition Width="15"/>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="38"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
               </Grid.ColumnDefinitions>
 
               <TextBlock Grid.Column="0" Text="{Binding Label}" Foreground="#9AA5B8"
-                         FontFamily="Segoe UI" FontSize="11" VerticalAlignment="Center"/>
+                         FontFamily="Segoe UI" FontSize="11.5" VerticalAlignment="Center"/>
 
               <!-- Cue 1: shape -->
               <TextBlock Grid.Column="1" Text="{Binding Glyph}" Foreground="{Binding Accent}"
                          FontSize="10" VerticalAlignment="Center" HorizontalAlignment="Center"/>
 
-              <!-- Cue 2: countable segments -->
-              <ItemsControl Grid.Column="2" ItemsSource="{Binding Cells}" VerticalAlignment="Center"
-                            Margin="3,0,6,0">
-                <ItemsControl.ItemsPanel>
-                  <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Rectangle Width="6" Height="9" RadiusX="1.5" RadiusY="1.5"
-                               Margin="0,0,2,0" Fill="{Binding}"/>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+              <!-- Cue 2: countable segments, drawn on whole physical pixels so rows align -->
+              <local:SegmentBar Grid.Column="2"
+                                Percent="{Binding PercentValue}"
+                                Accent="{Binding Accent}"
+                                Track="{x:Static local:LimitRow.Track}"
+                                Segments="12"
+                                VerticalAlignment="Center"
+                                Margin="4,0,8,0"/>
 
-              <!-- Cue 3: the number -->
-              <TextBlock Grid.Column="3" Text="{Binding Percent}" Foreground="#F2F5FA"
-                         FontFamily="Segoe UI" FontSize="11.5" FontWeight="SemiBold"
-                         VerticalAlignment="Center" HorizontalAlignment="Right"/>
+              <!-- Cue 3: the number, in a rounded chip that separates it from the reset time -->
+              <Border Grid.Column="3"
+                      Background="{x:Static local:LimitRow.ChipFill}"
+                      CornerRadius="5" Padding="6,1,6,2" MinWidth="44"
+                      VerticalAlignment="Center">
+                <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA"
+                           FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"
+                           HorizontalAlignment="Right"/>
+              </Border>
 
-              <TextBlock Grid.Column="4" Text="{Binding Reset}" Foreground="#A7B2C6"
-                         FontFamily="Segoe UI" FontSize="10" Margin="7,0,0,0"
+              <TextBlock Grid.Column="4" Text="{Binding Reset}" Foreground="#C8D2E4"
+                         FontFamily="Segoe UI" FontSize="11.5" Margin="8,0,0,0"
                          VerticalAlignment="Center"/>
             </Grid>
           </DataTemplate>
@@ -74,7 +79,7 @@
 
       <!-- Degraded state: Claude Code missing, signed out, or offline. Never a crash. -->
       <StackPanel x:Name="MessagePanel" Orientation="Horizontal" Visibility="Visible">
-        <TextBlock Text="◌" Foreground="#8B93A3" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+        <TextBlock Text="◌" Foreground="#9AA5B8" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
         <TextBlock x:Name="MessageText" Text="starting…" Foreground="#C9D1DE"
                    FontFamily="Segoe UI" FontSize="11.5" VerticalAlignment="Center"/>
       </StackPanel>

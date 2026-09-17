@@ -46,15 +46,55 @@ public static class ScreenService
     }
 
     /// <summary>
-    /// Bottom-right of the chosen monitor's working area — directly above the clock,
-    /// since the working area already excludes the taskbar.
+    /// Where the pill sits for a given anchor. The working area already excludes the taskbar,
+    /// so a bottom anchor snaps to the taskbar's edge, and to the screen edge without one.
     /// </summary>
-    public static (int X, int Y) AboveClock(MonitorInfo monitor, int width, int height,
-        int offsetX, int offsetY)
+    public static (int X, int Y) Place(MonitorInfo m, SnapAnchor anchor, int width, int height,
+        int padding, int freeOffsetX, int freeOffsetY)
     {
-        var x = monitor.Right - width - offsetX;
-        var y = monitor.Bottom - height - offsetY;
-        return Clamp(monitor, x, y, width, height);
+        var (x, y) = anchor switch
+        {
+            SnapAnchor.BottomRight  => (m.Right - width - padding, m.Bottom - height - padding),
+            SnapAnchor.BottomLeft   => (m.Left + padding,          m.Bottom - height - padding),
+            SnapAnchor.TopRight     => (m.Right - width - padding, m.Top + padding),
+            SnapAnchor.TopLeft      => (m.Left + padding,          m.Top + padding),
+            SnapAnchor.BottomCentre => (Centre(m, width),          m.Bottom - height - padding),
+            SnapAnchor.TopCentre    => (Centre(m, width),          m.Top + padding),
+            _                       => (m.Right - width - freeOffsetX, m.Bottom - height - freeOffsetY)
+        };
+
+        return Clamp(m, x, y, width, height);
+    }
+
+    private static int Centre(MonitorInfo m, int width) => m.Left + (m.Right - m.Left - width) / 2;
+
+    /// <summary>
+    /// Works out which anchor a dropped pill should take: whichever corner or edge it landed
+    /// within <paramref name="threshold"/> physical pixels of. Returns Free when it was
+    /// dropped out in the open.
+    /// </summary>
+    public static SnapAnchor AnchorForDrop(MonitorInfo m, int left, int top, int width, int height,
+        int threshold)
+    {
+        var nearLeft = left - m.Left <= threshold;
+        var nearRight = m.Right - (left + width) <= threshold;
+        var nearTop = top - m.Top <= threshold;
+        var nearBottom = m.Bottom - (top + height) <= threshold;
+
+        // Horizontally centred, within threshold of the midline.
+        var centreX = m.Left + (m.Right - m.Left) / 2;
+        var nearCentre = Math.Abs(left + width / 2 - centreX) <= threshold;
+
+        return (nearBottom, nearTop, nearLeft, nearRight, nearCentre) switch
+        {
+            (true, _, true, _, _) => SnapAnchor.BottomLeft,
+            (true, _, _, true, _) => SnapAnchor.BottomRight,
+            (_, true, true, _, _) => SnapAnchor.TopLeft,
+            (_, true, _, true, _) => SnapAnchor.TopRight,
+            (true, _, _, _, true) => SnapAnchor.BottomCentre,
+            (_, true, _, _, true) => SnapAnchor.TopCentre,
+            _ => SnapAnchor.Free
+        };
     }
 
     public static (int X, int Y) Clamp(MonitorInfo monitor, int x, int y, int width, int height)
