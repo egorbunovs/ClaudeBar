@@ -6,8 +6,11 @@
 #   docs\screenshots.ps1 -Out docs\screenshots\pill.png
 #   docs\screenshots.ps1 -Out docs\screenshots\all-accounts.png -ShowAll
 #   docs\screenshots.ps1 -Out docs\screenshots\mini.png -Mini
-#   docs\screenshots.ps1 -Out docs\screenshots\picker.png -Picker
-#   docs\screenshots.ps1 -Out docs\screenshots\menu.png -RightClick
+#   docs\screenshots.ps1 -Out docs\screenshots\picker.png -Picker -Scale 2
+#   docs\screenshots.ps1 -Out docs\screenshots\menu.png -RightClick -Scale 2
+#
+# The menu shots use -Scale 2: at 3x the menu is taller than the screen, and Windows answers
+# that by scrolling it, which puts scroll arrows in the picture and cuts off "Quit ClaudeBar".
 #
 param(
     [Parameter(Mandatory = $true)][string]$Out,
@@ -16,6 +19,10 @@ param(
     [switch]$RightClick,
     # Left-click the switch button in the header, which opens the account picker.
     [switch]$Picker,
+    # The pill is laid out this many times bigger, shot, and resampled back down. Everything
+    # - text, the segment bars, the glyphs, the shadow - is drawn at the larger size, so the
+    # result has smooth edges instead of the app's own 16-pixel-tall hinted text blown up.
+    [double]$Scale = 3,
     [int]$Pad = 24
 )
 
@@ -118,7 +125,7 @@ public static class Win {
 
 # Absolute, and created now: .NET's idea of the working directory is not PowerShell's, so a
 # relative path here fails at the very end, after the shot has been taken.
-$Out = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Out))
+$Out = [System.IO.Path]::GetFullPath($Out, (Get-Location).Path)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
 
 # A demo left over from a run that threw would hold the single-instance mutex and the next
@@ -138,7 +145,9 @@ $screen = [System.Windows.Forms.Screen]::AllScreens |
 # The demo never writes settings back, so this file only sets the starting state.
 @{
     MonitorDeviceName = $screen.DeviceName
-    Anchor            = "TopCentre"
+    # Menus open down and to the right of the click, and Windows flips them back over the
+    # pill when there is no room - so for those shots the pill starts at the left edge.
+    Anchor            = $(if ($RightClick -or $Picker) { "TopLeft" } else { "TopCentre" })
     SnapPadding       = 24
     SnapThreshold     = 64
     OffsetX           = 24
@@ -152,8 +161,12 @@ $screen = [System.Windows.Forms.Screen]::AllScreens |
     Mini              = [bool]$Mini
 } | ConvertTo-Json | Set-Content -Path $settings -Encoding utf8
 
-$proc = Start-Process -FilePath (Join-Path $exeDir 'ClaudeBar.exe') -ArgumentList '--demo' -PassThru
+$proc = Start-Process -FilePath (Join-Path $exeDir 'ClaudeBar.exe') `
+    -ArgumentList '--demo', "--scale=$($Scale.ToString([System.Globalization.CultureInfo]::InvariantCulture))" -PassThru
 Start-Sleep -Seconds 3
+
+# Everything measured in pixels below is a distance on the scaled pill.
+$Pad = [int]($Pad * $Scale)
 
 # A backdrop for the pill to sit on, covering the desktop while the shot is taken.
 $form = New-Object System.Windows.Forms.Form
@@ -194,8 +207,10 @@ function Get-DemoWindows {
             Left = [int]$f[0]; Top = [int]$f[1]; Right = [int]$f[2]; Bottom = [int]$f[3]; Title = $f[4]
         }
     } | Where-Object {
-        # On this screen only: one of the app's windows is parked off to the side.
-        $_.Left -ge $screen.Bounds.Left -and $_.Right -le $screen.Bounds.Right
+        # Centred on this screen: one of the app's windows is parked off to the side, and a
+        # pill snapped to the left edge starts a shadow's width outside the screen proper.
+        $mid = ($_.Left + $_.Right) / 2
+        $mid -ge $screen.Bounds.Left -and $mid -le $screen.Bounds.Right
     }
 }
 
@@ -206,8 +221,8 @@ if ($RightClick) {
     $w = Get-DemoWindows | Where-Object { $_.Title -eq 'ClaudeBar' } | Select-Object -First 1
     # Bottom-right corner of the pill: the menu then opens down and to the right, and the
     # pill it belongs to stays readable beside it.
-    $cx = [int]($w.Right - $shadow - 12)
-    $cy = [int]($w.Bottom - $shadow - 8)
+    $cx = [int]($w.Right - $shadow - 12 * $Scale)
+    $cy = [int]($w.Bottom - $shadow - 8 * $Scale)
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point $cx, $cy
     Start-Sleep -Milliseconds 400
     [Win]::RightClickAt($cx, $cy)
@@ -217,8 +232,8 @@ if ($RightClick) {
 if ($Picker) {
     $w = Get-DemoWindows | Where-Object { $_.Title -eq 'ClaudeBar' } | Select-Object -First 1
     # The switch button, third glyph from the right of the header line.
-    $cx = [int]($w.Right - $shadow - 84)
-    $cy = [int]($w.Top + $shadow + 21)
+    $cx = [int]($w.Right - $shadow - 84 * $Scale)
+    $cy = [int]($w.Top + $shadow + 21 * $Scale)
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point $cx, $cy
     Start-Sleep -Milliseconds 400
     [Win]::LeftClickAt($cx, $cy)
@@ -232,8 +247,8 @@ $rects = @($pill)
 if ($RightClick -or $Picker) {
     $rects += Get-DemoWindows | Where-Object {
         $_.Title -ne 'ClaudeBar' -and
-        $_.Left -gt $pill.Left - 600 -and $_.Left -lt $pill.Right + 200 -and
-        $_.Top -gt $pill.Top - 200 -and $_.Top -lt $pill.Bottom + 400
+        $_.Left -gt $pill.Left - 600 * $Scale -and $_.Left -lt $pill.Right + 200 * $Scale -and
+        $_.Top -gt $pill.Top - 200 * $Scale -and $_.Top -lt $pill.Bottom + 400 * $Scale
     }
 }
 if ($rects.Count -eq 0) { throw "no visible demo window" }
@@ -252,11 +267,31 @@ $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size $w, $h))
 $g.Dispose()
 
+# Back down to the size the app is really drawn at, resampling the 3x render. The wrap mode
+# matters: without TileFlipXY the bicubic filter reads transparent black beyond the edges and
+# leaves a pale halo around all four sides.
+if ($Scale -ne 1) {
+    $sw = [int][Math]::Round($w / $Scale)
+    $sh = [int][Math]::Round($h / $Scale)
+    $small = New-Object System.Drawing.Bitmap $sw, $sh
+    $g = [System.Drawing.Graphics]::FromImage($small)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $attr = New-Object System.Drawing.Imaging.ImageAttributes
+    $attr.SetWrapMode([System.Drawing.Drawing2D.WrapMode]::TileFlipXY)
+    $g.DrawImage($bmp, (New-Object System.Drawing.Rectangle 0, 0, $sw, $sh),
+                 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $attr)
+    $g.Dispose()
+    $attr.Dispose()
+    $bmp.Dispose()
+    $bmp = $small
+}
+
 $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
+"$Out  ($($bmp.Width) x $($bmp.Height), rendered at ${Scale}x)"
 $bmp.Dispose()
 
 $form.Close()
 $form.Dispose()
 Stop-Process -Id $proc.Id -Force
-"$Out  ($w x $h)"
-$rects | ForEach-Object { "   window '$($_.Title)' $($_.Left),$($_.Top) $($_.Right - $_.Left)x$($_.Bottom - $_.Top)" }

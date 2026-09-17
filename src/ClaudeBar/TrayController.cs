@@ -105,12 +105,22 @@ public sealed class TrayController : IDisposable
         _icon.Text = text.Length > 62 ? text[..62] : text;
 
         var worst = snapshot.Worst;
-        var percent = worst?.Percent ?? 0;
+
+        // The NUMBER is the 5-hour window: that is the one being spent right now, and the one
+        // a glance at the tray is asking about. The weekly moves slowly and is in the tooltip.
+        var session = snapshot.Limits.FirstOrDefault(l => l.Kind == "session" || l.Group == "session")
+                      ?? worst;
+        var percent = session?.Percent ?? 0;
+
+        // The COLOUR still follows whichever window is worst, so the icon can never look calm
+        // while the weekly is the thing about to stop you.
+        var alarming = worst?.Percent ?? percent;
+
         // 3 = the wall itself. It gets its own announcement: "nearly gone" at 100% is wrong.
         var level = !snapshot.Ok ? -1
-            : percent >= 100 ? 3
-            : percent >= _settings.CriticalAt ? 2
-            : percent >= _settings.WarnAt ? 1
+            : alarming >= 100 ? 3
+            : alarming >= _settings.CriticalAt ? 2
+            : alarming >= _settings.WarnAt ? 1
             : 0;
 
         var old = _current;
@@ -121,6 +131,8 @@ public sealed class TrayController : IDisposable
         // Warn on the way up only, once per threshold crossing. Uses ClaudeBar's own toast:
         // shell balloons get titled with the app's AppUserModelID when it has no registered
         // shell identity, which is where "Microsoft.Explorer.Notification..." came from.
+        // Warnings stay keyed to the worst window, and name it, so a weekly running out is
+        // still announced even while the icon is showing a comfortable session number.
         if (level > 0 && level > _lastAnnouncedLevel && snapshot.Ok && worst is not null)
         {
             var title = level switch
@@ -133,7 +145,7 @@ public sealed class TrayController : IDisposable
                 ? $"{worst.ShortLabel} window is used up" +
                   (worst.ResetText.Length > 0 ? $" - resets in {worst.ResetText}. " : ". ") +
                   "Switch account from the menu to carry on."
-                : $"{worst.ShortLabel} window at {percent:0}%" +
+                : $"{worst.ShortLabel} window at {worst.Percent:0}%" +
                   (worst.ResetText.Length > 0 ? $", resets in {worst.ResetText}" : "");
             _window.Dispatcher.Invoke(() => _window.ShowToast(title, body, Math.Min(level, 2)));
         }

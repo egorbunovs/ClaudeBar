@@ -1,3 +1,5 @@
+using System.Windows;
+using System.Windows.Media;
 using ClaudeBar.Models;
 using ClaudeBar.Services;
 
@@ -21,7 +23,26 @@ internal static class Demo
 {
     public static bool Enabled { get; private set; }
 
-    public static void Enable() => Enabled = true;
+    /// <summary>
+    /// Layout scale for screenshots: `--demo --scale=3` lays the whole pill out three times
+    /// bigger, and the capture script shrinks the shot back down. Text, the segment bars and
+    /// the glyphs are all drawn at the larger size and then resampled, which is what makes a
+    /// README image look like the app instead of like a magnified screenshot of it.
+    /// </summary>
+    public static double Scale { get; private set; } = 1;
+
+    public static void Enable(double scale = 1)
+    {
+        Enabled = true;
+        Scale = scale is >= 1 and <= 8 ? scale : 1;
+    }
+
+    /// <summary>Applies the screenshot scale to a pill or a menu. A no-op outside demo mode.</summary>
+    public static void ApplyScale(FrameworkElement? element)
+    {
+        if (element is null || Scale == 1) return;
+        element.LayoutTransform = new ScaleTransform(Scale, Scale);
+    }
 
     private static readonly DateTimeOffset Started = DateTimeOffset.UtcNow;
 

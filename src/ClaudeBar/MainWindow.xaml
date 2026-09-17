@@ -16,6 +16,12 @@
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType">
 
+  <!-- Root exists to carry the screenshot scale (see Demo.ApplyScale). The transform has to
+       sit OUTSIDE the shell's margin: on the shell itself, the margin is measured in the
+       parent's space and would stay 10px while the shadow grew, which is the clipping this
+       margin exists to prevent. -->
+  <Grid x:Name="Root">
+
   <!-- The margin is the room the drop shadow falls into. Without it the blur is clipped by
        the window's own rectangle, which draws exactly what it sounds like: square, faintly
        grey corners around the rounded pill. Everything that positions the pill measures the
@@ -67,11 +73,15 @@
                   <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Radio: filled for the active account; click an empty one to switch. -->
+                <!-- Radio: filled for the active account; click an empty one to switch.
+                     Two ellipses rather than a font glyph - shapes are anti-aliased, not
+                     hinted, so the ring stays a full circle wherever the pill lands. -->
                 <Border Grid.Column="0" Tag="radio" Style="{StaticResource Tap}"
                         Padding="3,1,6,1" Margin="-4,0,2,0" ToolTip="{Binding RadioTip}">
-                  <TextBlock Text="{Binding Glyph}" Foreground="{Binding GlyphBrush}"
-                             FontFamily="Segoe MDL2 Assets" FontSize="13" VerticalAlignment="Center"/>
+                  <Grid Width="12" Height="12" VerticalAlignment="Center">
+                    <Ellipse Stroke="{Binding RadioStroke}" StrokeThickness="1.3"/>
+                    <Ellipse Width="6" Height="6" Fill="{Binding RadioFill}"/>
+                  </Grid>
                 </Border>
 
                 <TextBlock Grid.Column="1" Text="{Binding Email}" Foreground="#A9B4C8"
@@ -204,4 +214,6 @@
       </StackPanel>
     </StackPanel>
   </Border>
+
+  </Grid>
 </Window>

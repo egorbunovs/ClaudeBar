@@ -17,8 +17,12 @@ public sealed class AccountView
 {
     public string AccountUuid { get; init; } = "";
     public string Email { get; init; } = "";
-    public string Glyph { get; init; } = "";
-    public Brush GlyphBrush { get; init; } = LimitRow.Muted;
+
+    // The radio is drawn, not typed. As a Segoe MDL2 glyph at 13px it was hinted onto whole
+    // pixels, and depending on where the pill happened to sit, the hinting flattened the left
+    // side of the ring into a straight edge - a circle with a slice missing.
+    public Brush RadioStroke { get; init; } = LimitRow.Muted;
+    public Brush RadioFill { get; init; } = Brushes.Transparent;
     public string Status { get; init; } = "";
     public Brush StatusBrush { get; init; } = LimitRow.Muted;
     public bool IsActive { get; init; }
@@ -74,9 +78,8 @@ public sealed class AccountView
             AccountUuid = usage.Account.AccountUuid,
             ShowingAll = showingAll,
             Email = usage.Account.Label,
-            // Segoe MDL2 Assets: RadioBtnOn / RadioBtnOff.
-            Glyph = usage.IsActive ? "" : "",
-            GlyphBrush = usage.IsActive ? LimitRow.Normal : LimitRow.Muted,
+            RadioStroke = usage.IsActive ? LimitRow.Normal : LimitRow.Muted,
+            RadioFill = usage.IsActive ? LimitRow.Normal : Brushes.Transparent,
             Status = status,
             StatusBrush = brush,
             IsActive = usage.IsActive,

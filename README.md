@@ -24,7 +24,9 @@ estimate from transcripts.
   `claude auth login`, or the menu's *Add an account* — and ClaudeBar notices within a second
   and remembers it. No extra step.
 - **Stays out of the way.** Minimize (`–`) to a single line of numbers, or hide it entirely
-  and read the percentage off the tray icon — it draws the number. Snaps to any screen edge or corner on any
+  and read the percentage off the tray icon — it draws the number: the 5-hour one, since that
+  is the window you are spending. Hovering it shows both, and the colour still follows
+  whichever window is closest to its ceiling. Snaps to any screen edge or corner on any
   monitor, remembers where you put it, starts with Windows if you want.
 
 Every account at once (`▾`) — one is nearly out, one has a week's headroom, and the radio
@@ -104,7 +106,9 @@ Nothing to bump by hand.
 
 `--demo` replaces the account store and the usage endpoint with three invented accounts. It
 reads no credentials, writes no settings, and cannot switch or sign in to anything; it exists
-so the screenshots above can be re-taken by anyone, with `docs/screenshots.ps1`.
+so the screenshots above can be re-taken by anyone, with `docs/screenshots.ps1`. Add
+`--scale=3` and the whole pill is laid out three times bigger — the script shoots that and
+resamples it down, which is why the images have smooth edges rather than magnified pixels.
 
 ## Colour
 

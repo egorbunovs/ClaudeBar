@@ -38,6 +38,12 @@ public partial class MainWindow : Window
         _multi = new MultiAccountUsage(_usage);
         InitializeComponent();
 
+        Demo.ApplyScale(Root);
+        if (Demo.Scale != 1)
+            // Display formatting hints glyphs onto whole pixels, which is right at the size
+            // the pill is normally drawn and wrong when the shot is about to be resampled.
+            TextOptions.SetTextFormattingMode(this, TextFormattingMode.Ideal);
+
         ApplyOpacity();
         ContextMenu = BuildMenu();
 
@@ -330,11 +336,16 @@ public partial class MainWindow : Window
         if (active is not null)
         {
             var snap = active.Snapshot;
-            var worst = snap.Worst;
+
+            // Every window, in the order the pill draws them - the icon only has room for the
+            // 5-hour number, so the hover is where the weekly gets to say its piece.
+            var summary = string.Join("  ", snap.Limits.Select(l =>
+                l.ShortLabel + " " + l.Percent.ToString("0") + "%"));
+
             _tray?.Update(
                 !snap.HasData ? "ClaudeBar - " + (snap.Error ?? "starting")
-                : worst is null ? "ClaudeBar"
-                : worst.ShortLabel + " " + worst.Percent.ToString("0") + "%",
+                : summary.Length == 0 ? "ClaudeBar"
+                : summary,
                 snap.HasData && !snap.Ok ? snap with { Error = null } : snap);
         }
 
@@ -360,7 +371,8 @@ public partial class MainWindow : Window
         {
             var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
             if (scale <= 0 || double.IsNaN(scale)) scale = 1.0;
-            return (int)Math.Round(ShadowDip * scale);
+            // The screenshot scale sits outside the margin, so it multiplies it too.
+            return (int)Math.Round(ShadowDip * scale * Demo.Scale);
         }
     }
 
@@ -607,6 +619,7 @@ public partial class MainWindow : Window
     public ContextMenu BuildMenu()
     {
         var menu = new ContextMenu();
+        Demo.ApplyScale(menu); // a menu at 1x in a 3x shot would resample into mush
 
         var refresh = new MenuItem { Header = "Refresh now" };
         refresh.Click += async (_, _) => await RefreshAsync();
@@ -767,6 +780,7 @@ public partial class MainWindow : Window
             PlacementTarget = this,
             Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint
         };
+        Demo.ApplyScale(picker);
         foreach (var item in AccountItems()) picker.Items.Add(item);
         picker.IsOpen = true;
     }
