@@ -30,7 +30,7 @@ estimate from transcripts.
   `claude auth login`, or the menu's *Add an account* — and ClaudeBar notices within a second
   and remembers it. No extra step.
 - **Stays out of the way.** Minimize (`–`) to a single line of numbers, or hide it entirely
-  and read the percentage off the tray icon. Snaps to any screen edge or corner on any
+  and read the percentage off the tray icon — it draws the number. Snaps to any screen edge or corner on any
   monitor, remembers where you put it, starts with Windows if you want.
 
 ## Install
@@ -47,7 +47,7 @@ ClaudeBar says so rather than crashing.
 | --- | --- |
 | Switch account | click `⇄`, or in the all-accounts view click an account's `○` |
 | Show all accounts / just the active one | click `▾` / `▴` |
-| Minimize to one line | click `–`; click the mini pill to restore |
+| Minimize to one line | click `–`; click `☐` on the mini pill to restore |
 | Move it | drag; it snaps to edges and corners, with a ghost showing where it will land |
 | Everything else | right-click: monitor, snap position, sliders, hide, autostart, quit |
 
