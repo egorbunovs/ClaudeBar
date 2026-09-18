@@ -45,6 +45,12 @@ public partial class App : Application
 
         base.OnStartup(e);
 
+        // An update arrives under a new versioned filename, which leaves yesterday's Run key
+        // pointing at an exe that is gone - and Windows skips a missing target without a word.
+        // Running this copy is the moment we can put that right. A demo pill must never touch
+        // the real entry, hence the guard.
+        if (!Demo.Enabled) Autostart.Refresh();
+
         var settings = AppSettings.Load();
         var window = new MainWindow(settings);
         _tray = new TrayController(window, settings);

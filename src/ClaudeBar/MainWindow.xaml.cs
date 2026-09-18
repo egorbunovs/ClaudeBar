@@ -980,15 +980,26 @@ public static class Autostart
 
     private static string ExePath => Environment.ProcessPath ?? "";
 
-    public static bool IsEnabled()
+    /// <summary>The exe the Run key names, unquoted, or null when there is no entry at all.</summary>
+    private static string? StoredPath()
     {
         try
         {
             using var k = Registry.CurrentUser.OpenSubKey(Key);
-            return k?.GetValue(Name) is string;
+            return k?.GetValue(Name) is string v && v.Trim().Trim('"') is { Length: > 0 } path
+                ? path
+                : null;
         }
-        catch { return false; }
+        catch { return null; }
     }
+
+    /// <summary>
+    /// True only when the entry exists AND still names a file that is there. An entry alone is
+    /// not enough: a release carries its version in the filename, so the previous version's
+    /// entry outlives its exe, and Windows skips a missing target in silence. Calling that
+    /// "enabled" is how the menu came to show a tick for an autostart that could never run.
+    /// </summary>
+    public static bool IsEnabled() => StoredPath() is { } path && System.IO.File.Exists(path);
 
     public static bool Toggle()
     {
@@ -996,10 +1007,34 @@ public static class Autostart
         {
             using var k = Registry.CurrentUser.OpenSubKey(Key, writable: true);
             if (k is null) return false;
-            if (IsEnabled()) { k.DeleteValue(Name, false); return false; }
+            // Off means off even when the stored path is broken: delete whatever is there, or
+            // an unticked box would leave a dead entry behind for Refresh to resurrect.
+            if (StoredPath() is not null) { k.DeleteValue(Name, false); return false; }
             k.SetValue(Name, "\"" + ExePath + "\"");
             return true;
         }
         catch { return false; }
+    }
+
+    /// <summary>
+    /// Re-home an entry whose exe has gone, onto this one. That is exactly what an update
+    /// leaves behind - the new file has a new versioned name - so launching the new exe once
+    /// repairs its own autostart. Deliberately narrow: it only ever rewrites an entry that is
+    /// already there, so it cannot opt anyone in, and it leaves an entry alone while the exe
+    /// it names still exists, so a deliberate choice of which copy starts is not overruled.
+    /// </summary>
+    public static void Refresh()
+    {
+        if (StoredPath() is not { } stored) return;     // never enabled: not ours to turn on
+        if (System.IO.File.Exists(stored)) return;      // still a real target: leave it be
+        if (ExePath.Length == 0) return;
+
+        try
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(Key, writable: true);
+            k?.SetValue(Name, "\"" + ExePath + "\"");
+            Diagnostics.Log(() => $"autostart re-homed: {stored} -> {ExePath}");
+        }
+        catch { /* a read-only Run key is the user's business, not a reason to fail startup */ }
     }
 }
