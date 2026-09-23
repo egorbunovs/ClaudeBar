@@ -28,6 +28,9 @@ public sealed class LimitRow
     public string Percent { get; init; } = "";
     public double PercentValue { get; init; }
     public string Reset { get; init; } = "";
+
+    /// <summary>Mini layout only: whether the reset time shows under the percentage.</summary>
+    public System.Windows.Visibility MiniResetVisibility { get; set; } = System.Windows.Visibility.Visible;
     public string Glyph { get; init; } = "●";
     public Brush Accent { get; init; } = Normal;
     public string Tooltip { get; init; } = "";

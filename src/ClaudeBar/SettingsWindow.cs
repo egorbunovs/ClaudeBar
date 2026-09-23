@@ -62,6 +62,9 @@ public sealed class SettingsWindow : Window
             v => $"{v:0}%",
             v => { _settings.CriticalAt = v; _onChanged(); }));
 
+        panel.Children.Add(Toggle("Show reset times in the mini pill", _settings.MiniResetTimes,
+            v => { _settings.MiniResetTimes = v; _onChanged(); }));
+
         var close = new Button
         {
             Content = "Close",
@@ -98,6 +101,23 @@ public sealed class SettingsWindow : Window
         FontWeight = FontWeights.SemiBold,
         Margin = new Thickness(0, 0, 0, 10)
     };
+
+    private static UIElement Toggle(string label, bool value, Action<bool> onChange)
+    {
+        var box = new CheckBox
+        {
+            Content = label,
+            IsChecked = value,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xC8, 0xD2, 0xE4)),
+            FontFamily = new FontFamily("Segoe UI"),
+            FontSize = 12,
+            Margin = new Thickness(0, 8, 0, 4),
+            Cursor = Cursors.Hand
+        };
+        box.Checked += (_, _) => onChange(true);
+        box.Unchecked += (_, _) => onChange(false);
+        return box;
+    }
 
     private static UIElement Slider(string label, double value, double min, double max,
         double tick, Func<double, string> format, Action<double> onChange)

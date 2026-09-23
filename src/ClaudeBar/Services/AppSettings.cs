@@ -70,6 +70,9 @@ public sealed class AppSettings
     /// <summary>Mini layout: one line, just the numbers. Click it to get the full pill back.</summary>
     public bool Mini { get; set; }
 
+    /// <summary>Mini layout: the time to each reset, in small text under its percentage.</summary>
+    public bool MiniResetTimes { get; set; } = true;
+
     [JsonIgnore] public string Path { get; private set; } = "";
 
     private static readonly JsonSerializerOptions Json = new()

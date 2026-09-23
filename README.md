@@ -35,11 +35,12 @@ buttons switch:
 ![All three accounts, each with its 5-hour and 7-day usage](docs/screenshots/all-accounts.png)
 
 The switcher (`⇄`), and the mini layout (`–`), which is the whole thing when you just want
-the numbers:
+the numbers — with the time to each reset in small type underneath (turn that off in
+*Settings* if you prefer the numbers alone):
 
 ![The account picker, listing three accounts with the current one checked](docs/screenshots/picker.png)
 
-![The mini pill: 5h 82%, 7d 61%, and a restore button](docs/screenshots/mini.png)
+![The mini pill: 5h 82% resetting in 3h 11m, 7d 61% resetting in 1d 21h, and a restore button](docs/screenshots/mini.png)
 
 Everything else is on the right-click menu:
 
@@ -66,8 +67,9 @@ ClaudeBar says so rather than crashing.
 | Move it | drag; it snaps to edges and corners, with a ghost showing where it will land |
 | Everything else | right-click: monitor, snap position, sliders, hide, autostart, quit |
 
-Settings (opacity, snap padding, poll interval, warning thresholds) are sliders under
-right-click → *Settings*, and live in a plain `settings.json` next to the exe.
+Settings (opacity, snap padding, poll interval, warning thresholds, and whether the mini pill
+shows reset times) are under right-click → *Settings*, and live in a plain `settings.json`
+next to the exe.
 
 ## How switching works, and what it touches
 

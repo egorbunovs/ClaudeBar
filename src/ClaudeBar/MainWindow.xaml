@@ -195,7 +195,8 @@
                   <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA" FontFamily="Segoe UI"
                              FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center"/>
                   <TextBlock Text="{Binding Reset}" Foreground="#9AA5B8" FontFamily="Segoe UI"
-                             FontSize="8.5" HorizontalAlignment="Center" Margin="0,-3,0,0"/>
+                             FontSize="8.5" HorizontalAlignment="Center" Margin="0,-3,0,0"
+                             Visibility="{Binding MiniResetVisibility}"/>
                 </StackPanel>
               </StackPanel>
             </DataTemplate>

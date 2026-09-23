@@ -16,6 +16,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Out,
     [switch]$ShowAll,
     [switch]$Mini,
+    # Mini layout without the reset times under the percentages (Settings toggle off).
+    [switch]$NoResetTimes,
     [switch]$RightClick,
     # Left-click the switch button in the header, which opens the account picker.
     [switch]$Picker,
@@ -159,6 +161,7 @@ $screen = [System.Windows.Forms.Screen]::AllScreens |
     Visible           = $true
     ShowAllAccounts   = [bool]$ShowAll
     Mini              = [bool]$Mini
+    MiniResetTimes    = -not $NoResetTimes
 } | ConvertTo-Json | Set-Content -Path $settings -Encoding utf8
 
 $proc = Start-Process -FilePath (Join-Path $exeDir 'ClaudeBar.exe') `

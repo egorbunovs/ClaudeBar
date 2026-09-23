@@ -125,7 +125,6 @@ public partial class MainWindow : Window
     // Every render reads from here and filters by the CURRENT mode, so a fetch that finishes
     // after the view was collapsed can update the model but can never put a second account
     // on screen. This replaced a "last rendered list" that did exactly that.
-
     //
     // Nothing is ever carried from one account to another. A failed poll falls back to THAT
     // account's last reading, or to nothing; it used to fall back to "the last good reading",
@@ -298,7 +297,10 @@ public partial class MainWindow : Window
         {
             // Just the ACTIVE account's numbers, one line. Never another account's: with no
             // reading of its own yet, it gets placeholders, not someone else's usage.
-            MiniRows.ItemsSource = LimitRow.ForSnapshot(active.Snapshot, _settings.WarnAt, _settings.CriticalAt);
+            var rows = LimitRow.ForSnapshot(active.Snapshot, _settings.WarnAt, _settings.CriticalAt);
+            foreach (var row in rows)
+                row.MiniResetVisibility = _settings.MiniResetTimes ? Visibility.Visible : Visibility.Collapsed;
+            MiniRows.ItemsSource = rows;
             MiniPanel.Visibility = Visibility.Visible;
             Accounts.Visibility = Visibility.Collapsed;
             MessagePanel.Visibility = Visibility.Collapsed;
