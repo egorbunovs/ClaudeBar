@@ -51,7 +51,7 @@ public sealed class AccountView
     public static AccountView From(AccountUsage usage, double warnAt, double criticalAt, bool showingAll)
     {
         var snap = usage.Snapshot;
-        var rows = snap.Limits.Select(l => LimitRow.From(l, warnAt, criticalAt)).ToList();
+        var rows = LimitRow.ForSnapshot(snap, warnAt, criticalAt);
 
         // A badge only for things the user can act on, or for "not here yet". A 429 or a
         // moment offline while a good reading is on screen is nobody's business.
@@ -63,11 +63,16 @@ public sealed class AccountView
             "sign in again" => ("sign in again", Warn),
             "refresh failed" => ("refresh failed", Warn),
             "no stored token" => ("not saved", Warn),
+            // With nothing on screen but grey bars, say why - otherwise they look broken.
+            "rate limited" when !snap.HasData => ("rate limited", LimitRow.Muted),
+            "offline" when !snap.HasData => ("offline", LimitRow.Muted),
+            "token expired" when !snap.HasData => ("waiting for Claude Code", LimitRow.Muted),
+            _ when !snap.HasData => ("no reading yet", LimitRow.Muted),
             _ => ("", LimitRow.Muted)
         };
 
         var lines = new List<string> { usage.Account.Detail };
-        lines.AddRange(rows.Select(r => r.Tooltip));
+        if (snap.HasData) lines.AddRange(rows.Select(r => r.Tooltip));
         if (snap.HasData)
             lines.Add(snap.Ok
                 ? $"Updated {snap.FetchedAt.ToLocalTime():HH:mm:ss}"

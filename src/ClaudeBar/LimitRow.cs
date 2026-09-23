@@ -62,6 +62,27 @@ public sealed class LimitRow
         };
     }
 
+    /// <summary>
+    /// Rows for a reading, or grey placeholders when there is none yet: every bar unlit, no
+    /// number. An account that has never been read shows as "unknown", never as someone
+    /// else's usage.
+    /// </summary>
+    public static List<LimitRow> ForSnapshot(UsageSnapshot snapshot, double warnAt, double criticalAt) =>
+        snapshot.HasData
+            ? snapshot.Limits.Select(l => From(l, warnAt, criticalAt)).ToList()
+            : new List<LimitRow> { Placeholder("5h"), Placeholder("7d") };
+
+    private static LimitRow Placeholder(string label) => new()
+    {
+        Label = label,
+        Percent = "–",
+        PercentValue = 0,
+        Reset = "",
+        Glyph = "○",
+        Accent = Muted,
+        Tooltip = "No reading for this account yet"
+    };
+
     private static int Level(double pct, double warnAt, double criticalAt) =>
         pct >= criticalAt ? 2 : pct >= warnAt ? 1 : 0;
 

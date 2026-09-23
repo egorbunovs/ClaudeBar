@@ -21,7 +21,6 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _countdown = new();
     private CancellationTokenSource _inFlight = new();
-    private UsageSnapshot? _lastGood;
     private TrayController? _tray;
     private bool _mouseDown;
     private bool _dragging;
@@ -82,12 +81,8 @@ public partial class MainWindow : Window
 
         // Show the last known reading immediately so the pill is never blank on startup, and a
         // restart is not forced into a fresh call it would likely get a 429 for anyway.
-        if (UsageCache.Load() is { } cached)
-        {
-            _lastGood = cached;
-            SetActiveUsage(cached);
-            RenderFromModel();
-        }
+        foreach (var (uuid, cached) in UsageCache.Load()) _model[uuid] = cached;
+        RenderFromModel();
 
         _timer.Start();
         _countdown.Start();
@@ -131,13 +126,12 @@ public partial class MainWindow : Window
     // after the view was collapsed can update the model but can never put a second account
     // on screen. This replaced a "last rendered list" that did exactly that.
 
-    private readonly Dictionary<string, UsageSnapshot> _model = new();
+    //
+    // Nothing is ever carried from one account to another. A failed poll falls back to THAT
+    // account's last reading, or to nothing; it used to fall back to "the last good reading",
+    // which right after a switch was the previous account's, filed under the new one.
 
-    private void SetActiveUsage(UsageSnapshot snapshot)
-    {
-        var uuid = CredentialWatcher.CurrentUuid();
-        if (uuid is not null) _model[uuid] = snapshot;
-    }
+    private readonly Dictionary<string, UsageSnapshot> _model = new();
 
     internal List<AccountUsage> CurrentAccounts()
     {
@@ -150,7 +144,8 @@ public partial class MainWindow : Window
         // The active account first, even if it is not (yet) in the store.
         var active = stored.FirstOrDefault(a => a.AccountUuid == activeUuid);
         if (active is null && activeUuid is not null)
-            active = new StoredAccount(activeUuid, _lastGood?.Account, null, null, null, DateTimeOffset.UtcNow);
+            active = new StoredAccount(activeUuid, _model.GetValueOrDefault(activeUuid)?.Account,
+                null, null, null, DateTimeOffset.UtcNow);
         if (active is not null)
             list.Add(new AccountUsage(active, true, _model.GetValueOrDefault(active.AccountUuid) ?? UsageSnapshot.Failed("loading")));
 
@@ -183,7 +178,8 @@ public partial class MainWindow : Window
         var ct = _inFlight.Token;
 
         var madeACall = false;
-        if (pollActive || _lastGood is null)
+        var activeUuid = CredentialWatcher.CurrentUuid();
+        if (pollActive || activeUuid is null || _model.GetValueOrDefault(activeUuid) is not { HasData: true })
         {
             UsageSnapshot active;
             try { active = await _usage.PollAsync(ct); }
@@ -191,21 +187,22 @@ public partial class MainWindow : Window
             if (ct.IsCancellationRequested) return;
             madeACall = true;
 
+            // The poll used whoever was signed in when it started. If that changed while it
+            // was in flight, this reading is someone else's; the change triggers its own poll.
+            if (CredentialWatcher.CurrentUuid() != activeUuid) return;
+
             ApplyBackoff(active);
-            if (active.Ok)
+            if (activeUuid is not null)
             {
-                _lastGood = active;
-                UsageCache.Save(active);
-                SetActiveUsage(active);
-            }
-            else if (_lastGood is not null)
-            {
-                // Keep the last good numbers on screen, carrying the error for the tooltip.
-                SetActiveUsage(_lastGood with { Error = active.Error, RetryAfter = active.RetryAfter });
-            }
-            else
-            {
-                SetActiveUsage(active);
+                if (active.Ok)
+                    _model[activeUuid] = active;
+                else if (_model.GetValueOrDefault(activeUuid) is { HasData: true } known)
+                    // Keep this account's last numbers on screen, carrying the error for the tooltip.
+                    _model[activeUuid] = known with { Error = active.Error, RetryAfter = active.RetryAfter };
+                else
+                    _model[activeUuid] = active;
+
+                if (active.Ok) UsageCache.Save(_model);
             }
         }
 
@@ -214,7 +211,6 @@ public partial class MainWindow : Window
 
         // The other accounts, one at a time, each drawn as soon as it arrives. Calls are
         // spaced out because the endpoint 429s two calls a couple of seconds apart.
-        var activeUuid = CredentialWatcher.CurrentUuid();
         foreach (var account in _switcher.Accounts().Where(a => a.AccountUuid != activeUuid))
         {
             if (madeACall)
@@ -234,6 +230,8 @@ public partial class MainWindow : Window
                 _model[account.AccountUuid] = snapshot;
             else if (_model[account.AccountUuid].HasData)
                 _model[account.AccountUuid] = _model[account.AccountUuid] with { Error = snapshot.Error };
+
+            if (snapshot.Ok) UsageCache.Save(_model);
 
             RenderFromModel();
         }
@@ -289,22 +287,27 @@ public partial class MainWindow : Window
 
         var anyData = accounts.Any(a => a.Snapshot.HasData);
 
-        if (anyData && _settings.Mini)
+        // Only a problem the user has to fix replaces the pill with a message. Anything else
+        // - still loading, a 429, a token Claude Code has yet to renew - draws the account
+        // with grey placeholder bars until a reading comes in.
+        var blocked = active is null || (!active.Snapshot.HasData && active.Snapshot.Error is
+            "Claude Code not found" or "not signed in" or "no token" or "no subscription login" or "signed out");
+        var showMessage = blocked && !anyData;
+
+        if (!showMessage && _settings.Mini && active is not null)
         {
-            // Just the active account's numbers, one line. Everything else collapses.
-            var source = active is { Snapshot.HasData: true } ? active : accounts.First(a => a.Snapshot.HasData);
-            MiniRows.ItemsSource = source.Snapshot.Limits
-                .Select(l => LimitRow.From(l, _settings.WarnAt, _settings.CriticalAt))
-                .ToList();
+            // Just the ACTIVE account's numbers, one line. Never another account's: with no
+            // reading of its own yet, it gets placeholders, not someone else's usage.
+            MiniRows.ItemsSource = LimitRow.ForSnapshot(active.Snapshot, _settings.WarnAt, _settings.CriticalAt);
             MiniPanel.Visibility = Visibility.Visible;
             Accounts.Visibility = Visibility.Collapsed;
             MessagePanel.Visibility = Visibility.Collapsed;
-            ToolTip = source.Account.Label;
+            ToolTip = active.Account.Label;
         }
-        else if (anyData)
+        else if (!showMessage)
         {
             // Sections for every account in the current mode. An account with no reading yet
-            // still gets its header, marked "loading", so expanding shows the list at once.
+            // still gets its header and grey placeholder bars, so expanding shows the list at once.
             Accounts.ItemsSource = accounts
                 .Select(a => AccountView.From(a, _settings.WarnAt, _settings.CriticalAt, _settings.ShowAllAccounts))
                 .ToList();
@@ -847,7 +850,18 @@ public partial class MainWindow : Window
         // The switch shells out to `claude auth status` to verify, so keep it off the UI thread.
         _credentials.Suppressed = true;
         AccountSwitcher.Result result;
-        try { result = await Task.Run(() => _switcher.SwitchTo(target)); }
+        try
+        {
+            // Hand Claude Code a live token, not the hours-old one an idle account is usually
+            // left holding: with that, the first poll after the switch reads this account's
+            // real numbers. Refreshing is safe right now - nothing uses this account yet. If
+            // it fails, the switch goes ahead as before and Claude Code refreshes it itself.
+            var (_, freshenError) = await _multi.EnsureFreshAsync(target, CancellationToken.None);
+            if (freshenError is not null)
+                Diagnostics.Log(() => $"switch: could not refresh {target.Label} first ({freshenError})");
+
+            result = await Task.Run(() => _switcher.SwitchTo(target));
+        }
         finally { _credentials.Suppressed = false; }
 
         Notify(result.Ok
@@ -856,7 +870,16 @@ public partial class MainWindow : Window
 
         Diagnostics.Log(() => $"switch result: ok={result.Ok} rolledBack={result.RolledBack} {result.Message}");
 
-        if (result.Ok) await RefreshAsync();
+        if (!result.Ok) return;
+
+        // Our own write was suppressed, so tell the watcher who is signed in now; otherwise
+        // Claude Code's next token refresh would be announced as an account change.
+        _credentials.AccountChanged(target.AccountUuid);
+
+        // Draw the new account at once - its last reading, or grey bars - rather than leaving
+        // the old account's numbers up until the poll lands.
+        RenderFromModel();
+        await RefreshAsync();
     }
 
     private void StartLogin()

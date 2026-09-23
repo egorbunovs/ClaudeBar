@@ -86,7 +86,7 @@
                            FontFamily="Segoe UI" FontSize="10.5" VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" MaxWidth="260"/>
 
-                <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="#FBBF24"
+                <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="{Binding StatusBrush}"
                            Visibility="{Binding StatusVisibility}"
                            FontFamily="Segoe UI" FontSize="10" VerticalAlignment="Center" Margin="8,0,0,0"/>
 
@@ -189,8 +189,14 @@
                            FontSize="10.5" VerticalAlignment="Center" Margin="0,0,4,0"/>
                 <TextBlock Text="{Binding Glyph}" Foreground="{Binding Accent}" FontSize="9"
                            VerticalAlignment="Center" Margin="0,0,4,0"/>
-                <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA" FontFamily="Segoe UI"
-                           FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <!-- The time left sits under its percentage, small, so the line stays one
+                     row of numbers. -->
+                <StackPanel VerticalAlignment="Center">
+                  <TextBlock Text="{Binding Percent}" Foreground="#F2F5FA" FontFamily="Segoe UI"
+                             FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                  <TextBlock Text="{Binding Reset}" Foreground="#9AA5B8" FontFamily="Segoe UI"
+                             FontSize="8.5" HorizontalAlignment="Center" Margin="0,-3,0,0"/>
+                </StackPanel>
               </StackPanel>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
