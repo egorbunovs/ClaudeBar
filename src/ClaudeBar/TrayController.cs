@@ -95,7 +95,7 @@ public sealed class TrayController : IDisposable
     {
         _window.Show();
         _window.Reposition();
-        _window.Topmost = true;
+        _window.KeepOnTop();
         _settings.Visible = true;
     }
 

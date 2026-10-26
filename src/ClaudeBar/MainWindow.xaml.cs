@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private readonly CredentialWatcher _credentials = new();
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _countdown = new();
+    private readonly DispatcherTimer _onTop = new();
     private CancellationTokenSource _inFlight = new();
     private TrayController? _tray;
     private bool _mouseDown;
@@ -63,6 +64,12 @@ public partial class MainWindow : Window
         // The reset countdown ticks on its own so the time left stays honest between polls.
         _countdown.Interval = TimeSpan.FromSeconds(30);
         _countdown.Tick += (_, _) => RenderFromModel();
+
+        // Topmost is a request Windows can quietly take back (see KeepOnTop), so it is checked
+        // rather than trusted. Every ordinary window from another program can cover the pill
+        // without the pill hearing about it, so this has to be a timer, not just a message.
+        _onTop.Interval = TimeSpan.FromSeconds(2);
+        _onTop.Tick += (_, _) => KeepOnTop();
     }
 
     public void AttachTray(TrayController tray) => _tray = tray;
@@ -70,6 +77,7 @@ public partial class MainWindow : Window
     private async void OnLoaded(object? sender, RoutedEventArgs e)
     {
         Reposition();
+        _onTop.Start();
 
         if (Demo.Enabled)
         {
@@ -97,7 +105,38 @@ public partial class MainWindow : Window
     {
         var handle = new WindowInteropHelper(this).Handle;
         Native.MakeToolWindow(handle); // keeps it out of Alt-Tab; it is a readout, not an app
+        HwndSource.FromHwnd(handle)?.AddHook(WndProc);
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(Reposition));
+    }
+
+    private const int WmWindowPosChanged = 0x0047;
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        // Moved in the z-order and stripped of topmost on the way: put it back now rather than
+        // at the next tick. Posted, not done here, so the fix is not a SetWindowPos from inside
+        // the one it is reacting to.
+        if (msg == WmWindowPosChanged && IsVisible && !Native.IsTopmost(hwnd))
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(KeepOnTop));
+        return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Puts the pill back on top if it has been pushed down. One way that happens, reproduced:
+    /// with ShowInTaskbar off, WPF gives the pill a hidden owner window of its own, and when
+    /// anything sends that owner to the back or marks it not-topmost, Windows takes the pill
+    /// with it and clears its topmost flag. Window.Topmost still says true afterwards, so the
+    /// "Topmost = true" re-assert this replaced never reached Windows at all - the pill stayed
+    /// under everything until a click raised it. CLAUDEBAR_DIAG=1 logs each rescue and why.
+    /// </summary>
+    public void KeepOnTop()
+    {
+        if (!IsVisible) return;
+        var handle = Handle;
+        if (Native.Buried(handle, PillBounds) is not { } why) return;
+
+        Native.BringToTopmost(handle);
+        Diagnostics.Log(() => $"on top: {why}; put back, now topmost={Native.IsTopmost(handle)}");
     }
 
     /// <summary>
@@ -353,8 +392,6 @@ public partial class MainWindow : Window
                 : summary,
                 snap.HasData && !snap.Ok ? snap with { Error = null } : snap);
         }
-
-        Topmost = true; // re-assert: other topmost windows can win the z-order over time
     }
 
     // ---- placement -----------------------------------------------------------------
