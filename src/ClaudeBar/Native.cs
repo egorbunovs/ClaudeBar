@@ -71,6 +71,11 @@ internal static class Native
     [DllImport("dwmapi.dll")]
     private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
+    /// <summary>Frees an HICON this process made, e.g. with Bitmap.GetHicon. Icon.Dispose will not.</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
+
     /// <summary>
     /// Marks the pill as a tool window: no Alt-Tab entry, no taskbar button.
     /// It still takes clicks, so the context menu and dragging keep working.

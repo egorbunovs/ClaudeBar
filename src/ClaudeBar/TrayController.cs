@@ -24,11 +24,12 @@ public sealed class TrayController : IDisposable
         _window = window;
         _settings = settings;
 
+        _current = Render(null, 0);
         _icon = new Forms.NotifyIcon
         {
             Text = "ClaudeBar",
             Visible = true,
-            Icon = Render(null, 0)
+            Icon = _current
         };
 
         _icon.MouseClick += (_, e) =>
@@ -207,7 +208,19 @@ public sealed class TrayController : IDisposable
         }
 
         DumpForDiagnostics(bmp, percent, level);
-        return Icon.FromHandle(bmp.GetHicon());
+
+        // Icon.FromHandle only borrows the HICON: disposing it frees nothing. Returned as is,
+        // every redraw leaked an icon and its bitmaps - 3 GDI handles - until, about 12 hours
+        // in, the process hit Windows' cap of 10,000 and WPF could no longer allocate what it
+        // draws the pill into. The pill froze on its last frame, and minimizing just cropped it.
+        // The clone owns its handle, so the Dispose in Update really does free the old icon.
+        var handle = bmp.GetHicon();
+        try
+        {
+            using var borrowed = Icon.FromHandle(handle);
+            return (Icon)borrowed.Clone();
+        }
+        finally { Native.DestroyIcon(handle); }
     }
 
     private static GraphicsPath RoundedRect(Rectangle r, int radius)
